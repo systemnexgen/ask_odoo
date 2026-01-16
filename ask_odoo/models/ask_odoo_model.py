@@ -1,13 +1,20 @@
 from odoo import models, fields, api
-import google.generativeai as genai
+from odoo.tools import config
 import logging
-import requests
 import json
 
 try:
-    from sentence_transformers import SentenceTransformer
+    from langchain_postgres.vectorstores import PGVector
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_community.chat_models import ChatOllama
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+    from langchain_core.output_parsers import StrOutputParser
+    from langchain_core.runnables import RunnablePassthrough
 except ImportError:
-    SentenceTransformer = None
+    # Handle missing dependencies gracefully or log warning
+    pass
 
 _logger = logging.getLogger(__name__)
 
@@ -21,15 +28,21 @@ class AskOdooModel(models.Model):
     active = fields.Boolean(default=True)
 
     # Embedding Model Cache
-    _embedding_model = None
+    # Caches
+    _vector_store = None
+    _embeddings = None
 
+
+    # ==========================
+    # PUBLIC ENTRY POINT (RPC)
+    # ==========================
     # ==========================
     # PUBLIC ENTRY POINT (RPC)
     # ==========================
     @api.model
     def process_message(self, message, conversation_id=None):
         """
-        Main orchestrator with Database Persistence.
+        Main orchestrator using LangChain.
         """
         # 1. Handle Conversation
         if conversation_id:
@@ -41,38 +54,68 @@ class AskOdooModel(models.Model):
             })
 
         # 2. Save User Message
-        self.env['ask.odoo.message'].create({
+        user_msg = self.env['ask.odoo.message'].create({
             'conversation_id': conversation.id,
             'type': 'user',
             'content': message,
         })
 
-        # 3. Build Context (History)
-        # Fetch last 10 messages for context (in ascending order for the prompt)
-        history_msgs = self.env['ask.odoo.message'].search(
-            [('conversation_id', '=', conversation.id)],
-            order='create_date desc',
-            limit=10
-        )
-        # Reverse to get chronological order for the AI
-        context_history = history_msgs.sorted(lambda m: m.create_date)
+        # 3. Build & Run Chain
+        try:
+            # Prepare Components
+            llm = self._get_llm()
+            retriever = self._get_retriever()
+            
+            # Prepare History (excluding the message we just added to avoid duplication in prompt)
+            history = self._get_history(conversation.id, exclude_id=user_msg.id)
+            
+            # Prepare Prompt
+            system_template = (
+                "You are a helpful Odoo AI Assistant. "
+                "Answer the user's question using the provided KNOWLEDGE BASE DOCUMENTS and the CONVERSATION HISTORY. "
+                "1. If the answer is in the documents, use that information explicitly.\n"
+                "2. If the user refers to previous messages (e.g., 'my name', 'what did we discuss'), check the CONVERSATION HISTORY.\n"
+                "3. If the answer is NOT in the documents or history, answer based on your general Odoo knowledge, but mention if you didn't find specific info in the uploaded files.\n\n"
+                "KNOWLEDGE BASE DOCUMENTS:\n{context}"
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_template),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "{question}"),
+            ])
 
-        # 4. RAG & Prompt Construction
-        context = self._build_context(message, conversation.id)
-        documents = self._retrieve_documents(context)  # Placeholder RAG
-        prompt = self._build_prompt(context, documents, context_history)
+            # Helper to format docs
+            def format_docs(docs):
+                return "\n\n".join(doc.page_content for doc in docs) if docs else ""
 
-        # 5. Call LLM
-        response_text = self._call_llm(prompt)
+            # Define Chain
+            rag_chain = (
+                {
+                    "context": retriever | format_docs,
+                    "history": lambda x: history,
+                    "question": lambda x: x
+                }
+                | prompt
+                | llm
+                | StrOutputParser()
+            )
+            
+            # Execute
+            response_text = rag_chain.invoke(message)
 
-        # 6. Save AI Response
+        except Exception as e:
+            _logger.exception("LangChain Execution Failed")
+            response_text = f"Error: {str(e)}"
+
+        # 4. Save AI Response
         self.env['ask.odoo.message'].create({
             'conversation_id': conversation.id,
             'type': 'ai',
             'content': response_text,
         })
 
-        # 7. Update Last Activity & Title (if new)
+        # 5. Update Last Activity & Title (if new)
         conversation.write({'last_activity': fields.Datetime.now()})
 
         if len(conversation.message_ids) <= 2:
@@ -81,7 +124,7 @@ class AskOdooModel(models.Model):
             conversation.write({'name': title})
 
         return {
-            'response': self._post_process(response_text),
+            'response': response_text,
             'conversation_id': conversation.id,
             'title': conversation.name
         }
@@ -110,173 +153,85 @@ class AskOdooModel(models.Model):
         } for m in messages]
 
     # ==========================
-    # CONTEXT BUILDING
+    # HELPERS
     # ==========================
-    def _build_context(self, message, conversation_id=None):
-        return {
-            "user_message": message,
-            "conversation_id": conversation_id,
-            "user_name": self.env.user.name,
-        }
+    
+    def _get_connection_string(self):
+        db_name = self.env.cr.dbname
+        user = config.get('db_user')
+        password = config.get('db_password')
+        host = config.get('db_host') or 'localhost'
+        port = config.get('db_port') or 5432
+        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
 
-    # ==========================
-    # RAG RETRIEVAL (PGVECTOR)
-    # ==========================
-    def _retrieve_documents(self, context):
-        """
-        Retrieves relevant documents using Vector Search (pgvector).
-        """
-        user_message = context.get('user_message', '')
-        if not user_message:
-            return []
-
-        # 1. Load Embedding Model (Lazy)
-        if not AskOdooModel._embedding_model:
-            if not SentenceTransformer:
-                _logger.error("sentence_transformers library not installed. Cannot perform vector search.")
-                return ["System Error: Vector Search unavailable."]
+    def _get_retriever(self):
+        if not AskOdooModel._vector_store:
+            # Initialize Embeddings
+            if not AskOdooModel._embeddings:
+                # Use HuggingFaceEmbeddings as replacement for locally managed SentenceTransformer
+                # Ensure 'sentence_transformers' is installed or 'langchain_huggingface'
+                AskOdooModel._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
             
-            _logger.info("Loading SentenceTransformer model 'all-MiniLM-L6-v2' for Retrieval...")
-            AskOdooModel._embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+            # Initialize PGVector
+            # Note: PGVector expects specific extension and tables. 
+            # We use the standard LangChain implementation.
+            connection = self._get_connection_string()
+            AskOdooModel._vector_store = PGVector(
+                embeddings=AskOdooModel._embeddings,
+                collection_name="ask_odoo_knowledge_chunk",
+                connection=connection,
+                use_jsonb=True,
+            )
+        
+        return AskOdooModel._vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 3}
+        )
 
-        # 2. Generate Query Embedding
-        try:
-            # encode returns a numpy array, we need a list for SQL
-            query_embedding = AskOdooModel._embedding_model.encode([user_message])[0].tolist()
-        except Exception as e:
-            _logger.error(f"Failed to generate embedding: {e}")
-            return []
+    def _get_llm(self):
+        # Google Gemini
+        # Hardcoded key as per previous implementation (Recommend moving to System Parameters)
+        API_KEY = "AIzaSyC3OdoD-Njt2SOpTBVPM4Z28JHiIhRfyTs"
+        
+        return ChatGoogleGenerativeAI(
+            model="gemini-2.5-flash",
+            google_api_key=API_KEY,
+            temperature=0.7,
+            convert_system_message_to_human=True # Helps with some Gemini versions
+        )
 
-        # 3. Vector Search via SQL
-        # Using cosine distance operator <=> from pgvector
-        # Results are ordered by distance ASC (closest first)
-        limit = 3
-        sql = """
-            SELECT c.content, d.name, (c.embedding <=> %s::vector) as distance
-            FROM ask_odoo_knowledge_chunk c
-            JOIN ask_odoo_knowledge_document d ON c.document_id = d.id
-            ORDER BY distance ASC
-            LIMIT %s
-        """
-        try:
-            self.env.cr.execute(sql, (str(query_embedding), limit))
-            results = self.env.cr.fetchall()
-        except Exception as e:
-            _logger.error(f"Vector search SQL failed: {e}")
-            return []
+        # Ollama Implementation (Commented out)
+        # return ChatOllama(
+        #     model="llama3.2:latest",
+        #     temperature=0.7,
+        #     base_url="http://localhost:11434"
+        # )
 
-        _logger.info(f"RAG Vector Search found {len(results)} chunks.")
-        docs = []
-        for content, doc_name, distance in results:
-            # distance is cosine distance (0-2).
-            # We present it as relevant context.
-            docs.append(f"Content from {doc_name} (Distance: {distance:.4f}):\n{content}")
-
-        return docs
-
-    # ==========================
-    # PROMPT ASSEMBLY
-    # ==========================
-    def _build_prompt(self, context, documents, history_records):
-        # Build Chat History Block
-        history_block = ""
+    def _get_history(self, conversation_id, exclude_id=None):
+        """Fetch history and convert to LangChain Messages."""
+        domain = [('conversation_id', '=', conversation_id)]
+        if exclude_id:
+            domain.append(('id', '!=', exclude_id))
+            
+        # CORRECT LOGIC: Fetch the *latest* N messages (desc), then reverse them to chronological order (asc)
+        messages = self.env['ask.odoo.message'].search(
+            domain,
+            order='create_date desc',
+            limit=10
+        )
+        
+        # Odoo Recordset to list, reversed to be chronological [Oldest -> Newest] for the LLM
+        # Note: messages is a recordset ordered by DESC (Newest -> Oldest). 
+        # We need Oldest -> Newest for the chat history.
+        history_records = list(messages)[::-1] 
+        
+        history = []
         for msg in history_records:
-            role = "User" if msg.type == 'user' else "Assistant"
-            history_block += f"{role}: {msg.content}\n"
+            if msg.type == 'user':
+                history.append(HumanMessage(content=msg.content or ""))
+            else:
+                history.append(AIMessage(content=msg.content or ""))
+                
+        _logger.info(f"Retrieved {len(history)} messages for history context.")
+        return history
 
-        # Build Documents Block
-        docs_block = ""
-        if documents:
-            docs_block = "RELAVENT KNOWLEDGE BASE DOCUMENTS:\n" + "\n\n".join(documents) + "\n\n"
-
-        system_prompt = (
-            "Use the provided KNOWLEDGE BASE DOCUMENTS to answer the user's question. "
-            "If the answer is found in the documents, Use the exact wordings from the document. "
-            "If the answer is NOT in the documents, answer based on your general Odoo knowledge, but you MUST mention that you didn't find specific info in the uploaded files.\n\n"
-        )
-        return f"{system_prompt}{docs_block}CONVERSATION HISTORY:\n{history_block}\nUser: {context['user_message']}\nAssistant:"
-
-    # ==========================
-    # LLM CALL (SWAPPABLE)
-    # ==========================
-    def _call_llm(self, prompt):
-        # """
-        # LLM abstraction layer.
-        # Switched to Ollama (gemma3:1b).
-        # """
-        # OLLAMA_URL = "http://localhost:11434/api/generate"
-        # MODEL_NAME = "llama3.2:latest"
-        
-        # try:
-        #     payload = {
-        #         "model": MODEL_NAME,
-        #         "prompt": prompt,
-        #         "stream": False,
-        #         "options": {
-        #             "num_ctx": 4096,  # Increase context window
-        #             "num_predict": 1024, # Allow for longer answers
-        #             "temperature": 0.7 
-        #         }
-        #     }
-        #     response = requests.post(OLLAMA_URL, json=payload, timeout=120)
-        #     response.raise_for_status()
-        #     result = response.json()
-        #     return result.get("response", "No response from Ollama.")
-        
-        # except Exception as e:
-        #     _logger.exception("LLM call failed")
-        #     return f"AI Error (Ollama): {str(e)}"
-
-        # You can swap this for 'gemini-1.5-pro' if you need more reasoning power
-        MODEL_NAME = "gemini-3-flash-preview"
-        # Ideally, fetch this from Odoo System Parameters
-        API_KEY = "AIzaSyCaB4B_Q2dnz8k7fxpyZ-Zrub8v9txB1u8"
-        GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={API_KEY}"
-
-        try:
-            # Gemini requires a specific 'contents' > 'parts' structure
-            payload = {
-                "contents": [{
-                    "parts": [{"text": prompt}]
-                }],
-                "generationConfig": {
-                    "maxOutputTokens": 1024,
-                    "temperature": 0.7
-                }
-            }
-
-            # Standard Odoo headers usually include content-type, but requests handles json= well
-            headers = {'Content-Type': 'application/json'}
-            
-            response = requests.post(GEMINI_URL, json=payload, headers=headers, timeout=120)
-            response.raise_for_status()
-            result = response.json()
-            
-            # Parse Gemini's nested response structure
-            # candidates[0] -> content -> parts[0] -> text
-            try:
-                return result['candidates'][0]['content']['parts'][0]['text']
-            except (KeyError, IndexError):
-                # Handle cases where safety filters block the response
-                return "No response generated. (Check safety settings or API quota)."
-        
-        except Exception as e:
-            _logger.exception("LLM call failed")
-            return f"AI Error (Gemini): {str(e)}"
-
-    # ==========================
-    # POST PROCESSING
-    # ==========================
-    def _post_process(self, response_text):
-        """
-        Final formatting layer.
-        Later:
-        - Markdown cleanup
-        - Safety filtering
-        - Code highlighting
-        - Logging
-        """
-        return (
-            f"{response_text}\n\n"
-            f"(Server Time: {fields.Datetime.now()})"
-        )
