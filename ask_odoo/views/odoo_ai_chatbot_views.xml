@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_odoo_ai_chatbot" model="ir.actions.client">
+        <field name="name">Ask Odoo</field>
+        <field name="tag">odoo_ai_chatbot.chat_client</field>
+    </record>
+
+    <menuitem id="menu_odoo_ai_chatbot"
+              name="Ask Odoo"
+              action="action_odoo_ai_chatbot"
+              sequence="10"
+              web_icon="ask_odoo,static/src/components/ai_chat/description/menu_icon.png"
+              />
+</odoo>

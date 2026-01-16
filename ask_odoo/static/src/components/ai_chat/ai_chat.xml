@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+    <t t-name="odoo_ai_chatbot.AiChat">
+        <div t-attf-class="o_ai_chat_root h-100 d-flex flex-column {{ state.darkMode ? 'o_dark_mode' : '' }}">
+            <Layout display="{controlPanel: {}}" className="'flex-grow-1 d-flex flex-column overflow-hidden'">
+                
+                <div class="d-flex flex-row flex-grow-1 overflow-hidden">
+                    <!-- Sidebar -->
+                    <div t-attf-class="o_ai_sidebar d-flex flex-column {{ state.sidebarOpen ? 'p-3' : 'collapsed' }}">
+                        
+                        <div class="o_sidebar_header d-flex align-items-center mb-3">
+                            <div class="d-flex align-items-center fw-bold fs-5 text-muted cursor-pointer">
+                                AskOdoo <i class="fa fa-chevron-down ms-2" style="font-size: 0.8rem;"></i>
+                            </div>
+                            <button class="btn btn-link text-muted p-0 border-0" t-on-click="toggleSidebar" title="Close Sidebar">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sidebar">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <button class="btn btn-outline-secondary w-100 mb-4 text-start d-flex align-items-center justify-content-between new-chat-btn" t-on-click="createNewChat">
+                            <span class="d-flex align-items-center"><i class="fa fa-plus me-2"></i> New Chat</span>
+                            <i class="fa fa-pencil-square-o"></i>
+                        </button>
+
+                        <div class="flex-grow-1 overflow-auto conversations-list custom-scrollbar">
+                            <div class="text-muted small mb-2 text-uppercase fw-bold" style="font-size: 0.75rem;">Today</div>
+                            <t t-foreach="state.conversations" t-as="chat" t-key="chat.id">
+                                <div t-attf-class="o_sidebar_item p-2 rounded mb-1 cursor-pointer text-truncate {{ state.currentChatId === chat.id ? 'active' : '' }}"
+                                     t-on-click="() => this.selectChat(chat.id)">
+                                    <t t-esc="chat.title"/>
+                                </div>
+                            </t>
+                        </div>
+                        
+                        <div class="border-top pt-3 mt-3 opacity-75 sidebar-footer">
+                             <div class="d-flex align-items-center mb-3 cursor-pointer" t-on-click="switchToKnowledgeBase">
+                                 <i class="fa fa-book me-2"></i>
+                                 <span class="small fw-bold">Knowledge Base</span>
+                             </div>
+                             <div class="d-flex align-items-center mb-2 cursor-pointer" t-on-click="toggleTheme">
+                                 <i t-attf-class="fa {{ state.darkMode ? 'fa-sun-o' : 'fa-moon-o' }} me-2"></i>
+                                 <span class="small fw-bold"><t t-esc="state.darkMode ? 'Light Mode' : 'Dark Mode'"/></span>
+                             </div>                            
+                        </div>
+                    </div>
+
+                    <!-- Main Chat Area -->
+                    <div class="o_main_chat_area d-flex flex-column flex-grow-1 position-relative">
+                        
+                        <!-- Floating Sidebar Toggle (Always valid to have available) -->
+                        <div class="position-absolute top-0 start-0 p-3" t-if="!state.sidebarOpen" style="z-index: 100;">
+                             <button class="btn btn-link text-muted p-0 border-0" t-on-click="toggleSidebar" title="Open Sidebar">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sidebar">
+                                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                                    <line x1="9" y1="3" x2="9" y2="21"></line>
+                                </svg>
+                            </button>
+                        </div>
+
+                        <!-- View 1: Chat Interface -->
+                        <t t-if="state.currentView === 'chat'">
+                            <!-- Chat Content -->
+                            <div class="o_ai_chat_content flex-grow-1 overflow-auto p-0 custom-scrollbar d-flex flex-column align-items-center" style="padding-bottom: 8rem !important;">
+                                
+                                <!-- Empty State -->
+                                <div t-if="state.messages.length === 0" class="flex-grow-1 d-flex flex-column justify-content-center align-items-center text-center w-100">
+                                    <h2 class="fw-bold mb-4">What's on your mind?</h2>
+                                </div>
+
+                                <!-- Messages Area -->
+                                <div t-else="" class="o_ai_chat_container w-100 p-4 pb-5">
+                                    <t t-foreach="state.messages" t-as="message" t-key="message.id">
+                                        <div t-attf-class="d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
+                                            
+                                            <div t-if="message.type === 'ai'" class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #19c37d;">
+                                                <i class="fa fa-bolt text-white small"></i>
+                                            </div>
+
+                                            <div t-attf-class="o_message_bubble p-3 rounded-3 {{ message.type === 'user' ? 'o_message_user' : 'o_message_ai' }}" style="max-width: 85%;">
+                                                <div class="o_message_text" style="white-space: pre-wrap;">
+                                                    <t t-out="message.text"/>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </t>
+                                    
+                                    <div t-if="state.isTyping" class="d-flex mb-4 justify-content-start">
+                                        <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #19c37d;">
+                                            <i class="fa fa-bolt text-white small"></i>
+                                        </div>
+                                        <div class="o_message_bubble o_message_ai p-3 rounded-3">
+                                            <div class="o_typing_indicator"><span>.</span><span>.</span><span>.</span></div>
+                                        </div>
+                                    </div>
+                                    <div t-ref="messagesEnd"></div>
+                                </div>
+                            </div>
+
+                            <!-- Input Area (Fixed Bottom) -->
+                            <div class="o_chat_input_section w-100 p-4">
+                                <div class="o_ai_chat_input_container mx-auto position-relative">
+                                    <div class="input-group shadow-sm rounded-4 overflow-hidden border">
+                                        <button class="btn border-0 ps-3" type="button">
+                                            <i class="fa fa-plus-circle fa-lg text-muted"></i>
+                                        </button>
+                                        <input type="text" 
+                                            class="form-control border-0 p-3 shadow-none" 
+                                            placeholder="Message AskOdoo..." 
+                                            t-model="state.input"
+                                            t-on-keydown="_onKeyDown"
+                                            autofocus="autofocus"/>
+                                        
+                                        <button class="btn border-0 px-3" 
+                                                type="button"
+                                                t-on-click="sendMessage"
+                                                t-att-disabled="!state.input or state.isTyping"
+                                                t-attf-class="{{ state.input ? 'text-primary' : 'text-muted' }}">
+                                            <i class="fa fa-arrow-up p-2 rounded-circle" t-attf-style="{{ state.input ? 'background: black; color: white;' : 'background: #e5e5e5;' }}"></i>
+                                        </button>
+                                    </div>                        
+                                </div>
+                            </div>
+                        </t>
+
+                        <!-- View 2: Knowledge Base Interface -->
+                        <t t-if="state.currentView === 'knowledge_base'">
+                            <div class="o_knowledge_base_view h-100 w-100 p-5 overflow-auto custom-scrollbar">
+                                <div class="container p-0" style="max-width: 1000px;">
+                                    <h1 class="fw-bold mb-4">Knowledge Base</h1>
+
+                                    <!-- Search & Upload Bar -->
+                                    <div class="d-flex mb-4">
+                                        <div class="position-relative flex-grow-1 me-3">
+                                            <i class="fa fa-search position-absolute text-muted" style="left: 15px; top: 50%; transform: translateY(-50%);"></i>
+                                            <input type="text" 
+                                                   class="form-control rounded-1 border py-2 ps-5" 
+                                                   style="background-color: transparent;"
+                                                   placeholder="Search manuals, guides, and SOPs..."/>
+                                        </div>
+                                        <input type="file" class="d-none" t-ref="fileInput" accept=".pdf" t-on-change="onFileUpload"/>
+                                        <button class="btn btn-primary rounded-1 px-4 btn-upload" t-on-click="triggerUpload">
+                                            Upload New Document
+                                        </button>
+                                    </div>
+
+                                    <!-- Document List -->
+                                    <div class="document-list border-top">
+                                        <t t-if="state.documents.length === 0">
+                                            <div class="text-center text-muted py-5">
+                                                <i class="fa fa-folder-open-o fa-3x mb-3"></i>
+                                                <p>No documents found.</p>
+                                            </div>
+                                        </t>
+                                        <t t-foreach="state.documents" t-as="doc" t-key="doc.id">
+                                            <div t-attf-class="document-item d-flex align-items-center py-3 border-bottom {{ doc.processing ? 'bg-light' : '' }}" 
+                                                 t-att-style="doc.processing ? 'opacity: 0.6;' : ''">
+                                                <!-- Icon -->
+                                                <div class="doc-icon me-3 text-danger">
+                                                    <i class="fa fa-file-pdf-o fa-2x"></i>
+                                                </div>
+                                                <!-- Text -->
+                                                <div class="flex-grow-1">
+                                                    <div class="fw-bold mb-0 text-dark doc-title"><t t-esc="doc.name"/></div>
+                                                    <div class="text-muted small mb-0 doc-desc"><t t-esc="doc.description"/></div>
+                                                    <div class="text-muted small doc-meta" style="font-size: 0.75rem;">Last updated: <t t-esc="doc.lastUpdated"/></div>
+                                                </div>
+                                                <!-- Action -->
+                                                <div t-if="!doc.processing">
+                                                    <button class="btn btn-primary btn-sm rounded-1 px-3 ms-3 btn-view">
+                                                        View
+                                                    </button>
+                                                    <button class="btn btn-outline-danger btn-sm rounded-1 px-3 ms-2 btn-delete" 
+                                                            t-on-click="() => this.deleteDocument(doc.id)"
+                                                            title="Delete Document">
+                                                        <i class="fa fa-trash-o"></i>
+                                                    </button>
+                                                </div>
+                                                <!-- Processing Indicator -->
+                                                <div t-else="" class="ms-3 d-flex align-items-center text-primary">
+                                                    <i class="fa fa-circle-o-notch fa-spin me-2"></i>
+                                                    <span class="small fw-bold">Processing</span>
+                                                </div>
+                                            </div>
+                                        </t>
+                                    </div>
+
+                                </div>
+                            </div>
+                        </t>
+
+                    </div>
+                </div>
+            </Layout>
+        </div>
+    </t>
+</templates>

@@ -1,0 +1,376 @@
+.o_ai_chat_root {
+    background-color: #ffffff;
+    color: #343541;
+
+    // --- Sidebar (Light Mode Default) ---
+    .o_ai_sidebar {
+        width: 260px;
+        background-color: #f9f9f9;
+        /* Light mode sidebar */
+        color: #343541;
+        flex-shrink: 0;
+        border-right: 1px solid rgba(0, 0, 0, 0.1);
+        transition: width 0.3s ease, padding 0.3s ease;
+        overflow: hidden;
+
+        &.collapsed {
+            width: 0 !important;
+            padding: 0 !important;
+            border-right: none;
+        }
+
+        .o_sidebar_header {
+            justify-content: space-between;
+        }
+
+        .new-chat-btn {
+            border-color: rgba(0, 0, 0, 0.1);
+            color: #343541;
+            transition: all 0.2s;
+
+            &:hover {
+                background-color: #e5e5e5;
+            }
+        }
+
+        .o_sidebar_item {
+            font-size: 0.9rem;
+            color: #343541;
+            transition: background 0.2s;
+
+            &:hover {
+                background-color: #e5e5e5;
+            }
+
+            &.active {
+                background-color: #d1d5db;
+            }
+        }
+
+        .sidebar-footer .small {
+            font-weight: 600;
+        }
+    }
+
+    // --- Main Area ---
+    .o_main_chat_area {
+        background-color: #ffffff;
+        transition: background-color 0.3s ease;
+
+        /* What's on your mind? text */
+        h2 {
+            color: #343541;
+        }
+    }
+
+    .o_ai_chat_container,
+    .o_ai_chat_input_container {
+        max-width: 768px;
+        /* Medium width like ChatGPT */
+        width: 100%;
+        margin: 0 auto;
+    }
+
+    .o_message_bubble {
+        line-height: 1.6;
+        font-size: 1rem;
+
+        &.o_message_user {
+            background-color: #e0e0e0;
+            /* More prominent gray */
+            color: #000;
+        }
+
+        &.o_message_ai {
+            background-color: #f4f4f4;
+            /* Light gray background */
+            color: #000;
+        }
+    }
+
+    .o_chat_input_section {
+        background-color: transparent; // Default fallback
+        background-image: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, #ffffff 40%);
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        width: 100%;
+        z-index: 10;
+        padding-top: 2rem !important; // Add some space at top for the gradient to breathe
+
+        .input-group {
+            background-color: #ffffff;
+            border: 1px solid #e5e5e5;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
+
+            input {
+                background: transparent;
+                color: #000;
+
+                &:focus {
+                    box-shadow: none;
+                }
+
+                &::placeholder {
+                    color: #8e8ea0;
+                }
+            }
+
+            .btn i {
+                color: #8e8ea0;
+            }
+        }
+    }
+
+    // --- Dark Mode Overrides ---
+    &.o_dark_mode {
+        background-color: #343541;
+        /* Dark Grey for Main BG */
+        color: #ececf1;
+
+        .o_main_chat_area {
+            /* Match body or slightly lighter/darker */
+            background-color: #343541;
+
+            /* What's on your mind? text */
+            h2 {
+                color: #ececf1;
+            }
+        }
+
+        .o_ai_sidebar {
+            background-color: #000000;
+            /* Distinct Black for sidebar */
+            color: #ececf1;
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+
+            .new-chat-btn {
+                border-color: rgba(255, 255, 255, 0.2);
+                color: white;
+
+                &:hover {
+                    background-color: #2A2B32;
+                }
+            }
+
+            .o_sidebar_item {
+                color: #ececf1;
+
+                &:hover {
+                    background-color: #2A2B32;
+                }
+
+                &.active {
+                    background-color: #343541;
+                }
+            }
+        }
+
+        .o_top_bar {
+            color: #ececf1 !important;
+
+            .text-muted {
+                color: #ececf1 !important;
+            }
+        }
+
+        .o_welcome_logo {
+            background-color: #40414f !important;
+
+            /* Lighter grey for circle */
+            i {
+                color: #ececf1 !important;
+            }
+        }
+
+        .o_message_bubble {
+            &.o_message_user {
+                background-color: #565869;
+                /* Lighter, prominent gray */
+                color: #ececf1;
+            }
+
+            &.o_message_ai {
+                background-color: #444654;
+                /* Distinct card color */
+                color: #ececf1;
+            }
+        }
+
+        .o_chat_input_section {
+            background-image: linear-gradient(180deg, rgba(52, 53, 65, 0) 0%, #343541 50%);
+
+            .input-group {
+                background-color: #40414f;
+                border-color: #565869;
+
+                input {
+                    color: white;
+
+                    &::placeholder {
+                        color: #8e8ea0;
+                    }
+                }
+
+                .btn {
+                    i {
+                        color: #8e8ea0;
+                    }
+                }
+            }
+        }
+
+        .text-muted {
+            color: #8e8ea0 !important;
+        }
+    }
+
+    // --- Typing Animation ---
+    .o_typing_indicator span {
+        animation: typing 1s infinite;
+        display: inline-block;
+        margin: 0 2px;
+        background-color: #8e8ea0;
+        /* Dot color */
+        border-radius: 50%;
+        width: 6px;
+        height: 6px;
+
+        &:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        &:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+    }
+
+    @keyframes typing {
+
+        0%,
+        100% {
+            opacity: 0.2;
+            transform: translateY(0);
+        }
+
+        50% {
+            opacity: 1;
+            transform: translateY(-3px);
+        }
+    }
+
+    // Scrollbar
+    .custom-scrollbar::-webkit-scrollbar {
+        width: 8px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background-color: rgba(0, 0, 0, 0.2);
+        border-radius: 4px;
+    }
+
+    .o_dark_mode .custom-scrollbar::-webkit-scrollbar-thumb {
+        background-color: rgba(255, 255, 255, 0.2);
+    }
+
+    // --- Knowledge Base View ---
+    .o_knowledge_base_view {
+        background-color: #f0f0f0; // Light gray background from image
+
+        h1 {
+            color: #343541;
+            font-size: 1.75rem;
+        }
+
+        .btn-upload {
+            background-color: #714B67;
+            border-color: #714B67;
+            color: white;
+
+            &:hover {
+                background-color: #5a3c52;
+                border-color: #5a3c52;
+            }
+        }
+
+        .btn-view {
+            background-color: #714B67;
+            border-color: #714B67;
+            color: white;
+            font-size: 0.8rem;
+            min-width: 80px;
+
+            &:hover {
+                background-color: #5a3c52;
+                border-color: #5a3c52;
+            }
+        }
+
+        .document-item {
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+
+            .doc-title {
+                font-size: 1rem;
+                color: #343541;
+            }
+
+            .doc-desc {
+                color: #555;
+            }
+
+            .doc-meta {
+                color: #777;
+            }
+        }
+
+        input {
+            background-color: #ffffff !important;
+            border: 1px solid #d1d5db !important;
+
+            &::placeholder {
+                color: #9ca3af;
+                font-size: 0.9rem;
+            }
+        }
+    }
+
+    &.o_dark_mode {
+        .o_knowledge_base_view {
+            background-color: #343541;
+
+            h1 {
+                color: #ececf1;
+            }
+
+            .document-item {
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+
+                .doc-title {
+                    color: #ececf1;
+                }
+
+                .doc-desc {
+                    color: #9ea2b0;
+                }
+
+                .doc-meta {
+                    color: #8e8ea0;
+                }
+            }
+
+            input {
+                background-color: #40414f !important;
+                border-color: #565869 !important;
+                color: white;
+
+                &::placeholder {
+                    color: #8e8ea0;
+                }
+            }
+        }
+    }
+}

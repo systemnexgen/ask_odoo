@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_ask_odoo_model,ask.odoo.model,model_ask_odoo_model,base.group_user,1,1,1,1
+access_ask_odoo_conversation,ask.odoo.conversation,model_ask_odoo_conversation,base.group_user,1,1,1,1
+access_ask_odoo_message,ask.odoo.message,model_ask_odoo_message,base.group_user,1,1,1,1
+access_ask_odoo_knowledge_document,ask.odoo.knowledge.document,model_ask_odoo_knowledge_document,base.group_user,1,1,1,1
