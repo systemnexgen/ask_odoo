@@ -2,19 +2,19 @@ from odoo import models, fields, api
 from odoo.tools import config
 import logging
 import json
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
-try:
-    from langchain_postgres.vectorstores import PGVector
-    from langchain_google_genai import ChatGoogleGenerativeAI
-    from langchain_community.chat_models import ChatOllama
-    from langchain_huggingface import HuggingFaceEmbeddings
-    from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-    from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-    from langchain_core.output_parsers import StrOutputParser
-    from langchain_core.runnables import RunnablePassthrough
-except ImportError:
-    # Handle missing dependencies gracefully or log warning
-    pass
+from langchain_postgres.vectorstores import PGVector
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_groq import ChatGroq
+from langchain_community.chat_models import ChatOllama
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
 _logger = logging.getLogger(__name__)
 
@@ -27,8 +27,9 @@ class AskOdooModel(models.Model):
     user_id = fields.Many2one('res.users', default=lambda self: self.env.user)
     active = fields.Boolean(default=True)
 
+    gemini_api_key = fields.Char(required=False)
+
     # Embedding Model Cache
-    # Caches
     _vector_store = None
     _embeddings = None
 
@@ -36,14 +37,13 @@ class AskOdooModel(models.Model):
     # ==========================
     # PUBLIC ENTRY POINT (RPC)
     # ==========================
-    # ==========================
-    # PUBLIC ENTRY POINT (RPC)
-    # ==========================
     @api.model
-    def process_message(self, message, conversation_id=None):
+    def process_message(self, message, conversation_id=None, chat_mode='conversation'):
         """
         Main orchestrator using LangChain.
         """
+        _logger.info(f"AskOdoo: Processing message in mode: {chat_mode}")
+
         # 1. Handle Conversation
         if conversation_id:
             conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
@@ -69,40 +69,52 @@ class AskOdooModel(models.Model):
             # Prepare History (excluding the message we just added to avoid duplication in prompt)
             history = self._get_history(conversation.id, exclude_id=user_msg.id)
             
-            # Prepare Prompt
+            # 1. Retrieve Context explicitly for logging
+            docs = retriever.invoke(message)
+            def format_docs(docs):
+                return "\n\n".join(doc.page_content for doc in docs) if docs else "No documents found."
+            context_text = format_docs(docs)
+            
+            _logger.info(f"\n=== [AskOdoo] DEBUG: Context Retrieved ===\n{context_text}\n===========================================")
+
+            # 2. Prepare Prompt
             system_template = (
-                "You are a helpful Odoo AI Assistant. "
-                "Answer the user's question using the provided KNOWLEDGE BASE DOCUMENTS and the CONVERSATION HISTORY. "
-                "1. If the answer is in the documents, use that information explicitly.\n"
-                "2. If the user refers to previous messages (e.g., 'my name', 'what did we discuss'), check the CONVERSATION HISTORY.\n"
-                "3. If the answer is NOT in the documents or history, answer based on your general Odoo knowledge, but mention if you didn't find specific info in the uploaded files.\n\n"
+                f"You are a helpful Odoo AI Assistant running in {chat_mode.upper()} mode.\n\n"
+
+                "CRITICAL INSTRUCTIONS:\n"
+                "- Answer ONLY the current question. Do NOT repeat previous answers.\n"
+                "- Make your answers short, to the point and accurate.\n"
+                "- Use the knowledge base documents below to answer the question.\n"
+                "- The conversation history is ONLY for understanding context - do NOT copy or repeat previous responses.\n"
+                "- Each question deserves a fresh, direct answer based on the knowledge base.\n"
+                "- Do NOT use assumptions.\n\n"
+
                 "KNOWLEDGE BASE DOCUMENTS:\n{context}"
             )
             
-            prompt = ChatPromptTemplate.from_messages([
+            prompt_template = ChatPromptTemplate.from_messages([
                 ("system", system_template),
                 MessagesPlaceholder(variable_name="history"),
                 ("human", "{question}"),
             ])
-
-            # Helper to format docs
-            def format_docs(docs):
-                return "\n\n".join(doc.page_content for doc in docs) if docs else ""
-
-            # Define Chain
-            rag_chain = (
-                {
-                    "context": retriever | format_docs,
-                    "history": lambda x: history,
-                    "question": lambda x: x
-                }
-                | prompt
-                | llm
-                | StrOutputParser()
+            
+            # 3. Format complete prompt messages to see exactly what is sent to LLM
+            prompt_messages = prompt_template.format_messages(
+                context=context_text,
+                history=history,
+                question=message
             )
             
-            # Execute
-            response_text = rag_chain.invoke(message)
+            # Log the full prompt payload (as text representation)
+            prompt_debug_str = "\n".join([f"[{m.type.upper()}]: {m.content}" for m in prompt_messages])
+            _logger.info(f"\n=== [AskOdoo] DEBUG: Full Prompt Payload ===\n{prompt_debug_str}\n============================================")
+
+            # 4. Invoke LLM directly
+            ai_message = llm.invoke(prompt_messages)
+            response_text = ai_message.content
+            
+            _logger.info(f"\n=== [AskOdoo] DEBUG: LLM Response ===\n{response_text}\n=====================================")
+
 
         except Exception as e:
             _logger.exception("LangChain Execution Failed")
@@ -189,21 +201,28 @@ class AskOdooModel(models.Model):
         )
 
     def _get_llm(self):
-        # Google Gemini
-        # Hardcoded key as per previous implementation (Recommend moving to System Parameters)
-        API_KEY = "AIzaSyC3OdoD-Njt2SOpTBVPM4Z28JHiIhRfyTs"
-        
-        return ChatGoogleGenerativeAI(
-            model="gemini-2.5-flash",
-            google_api_key=API_KEY,
-            temperature=0.7,
-            convert_system_message_to_human=True # Helps with some Gemini versions
+        # Groq Implementation
+        GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+        print(f"Groq API Key: {GROQ_API_KEY}")
+        return ChatGroq(
+            model="llama-3.1-8b-instant",
+            groq_api_key=GROQ_API_KEY,
+            temperature=0.1
         )
+        
+        # # Google Gemini
+        # API_KEY = "AIzaSyDY2sLovBB-Mw9vkg0FoIE9yM8xXTgTGm4" 
+        # print(f"Google API Key: {API_KEY}")
+        # return ChatGoogleGenerativeAI(
+        #     model="gemma-3-4b-it",
+        #     google_api_key=API_KEY,
+        #     temperature=0.1
+        # )
 
-        # Ollama Implementation (Commented out)
+        # # Ollama Implementation (Commented out)
         # return ChatOllama(
         #     model="llama3.2:latest",
-        #     temperature=0.7,
+        #     temperature=0,
         #     base_url="http://localhost:11434"
         # )
 
@@ -213,17 +232,15 @@ class AskOdooModel(models.Model):
         if exclude_id:
             domain.append(('id', '!=', exclude_id))
             
-        # CORRECT LOGIC: Fetch the *latest* N messages (desc), then reverse them to chronological order (asc)
+        # Fetch latest N messages
         messages = self.env['ask.odoo.message'].search(
             domain,
-            order='create_date desc',
+            order='id desc',
             limit=10
         )
         
-        # Odoo Recordset to list, reversed to be chronological [Oldest -> Newest] for the LLM
-        # Note: messages is a recordset ordered by DESC (Newest -> Oldest). 
-        # We need Oldest -> Newest for the chat history.
-        history_records = list(messages)[::-1] 
+        # Sort by ID ascending explicitly to ensure chronological order [Oldest -> Newest]
+        history_records = messages.sorted(lambda m: m.id)
         
         history = []
         for msg in history_records:
@@ -232,6 +249,6 @@ class AskOdooModel(models.Model):
             else:
                 history.append(AIMessage(content=msg.content or ""))
                 
-        _logger.info(f"Retrieved {len(history)} messages for history context.")
+        _logger.info(f"Retrieved {len(history)} messages for history. IDs: {history_records.ids}")
         return history
 
