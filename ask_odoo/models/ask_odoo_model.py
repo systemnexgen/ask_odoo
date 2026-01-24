@@ -211,7 +211,7 @@ class AskOdooModel(models.Model):
         )
         
         # # Google Gemini
-        # API_KEY = "AIzaSyDY2sLovBB-Mw9vkg0FoIE9yM8xXTgTGm4" 
+        # API_KEY = "key" 
         # print(f"Google API Key: {API_KEY}")
         # return ChatGoogleGenerativeAI(
         #     model="gemma-3-4b-it",
