@@ -11,6 +11,7 @@ export class AiChat extends Component {
 
     setup() {
         this.orm = useService("orm");
+        this.notification = useService("notification");
         this.state = useState({
             conversations: [],
             messages: [],
@@ -64,12 +65,25 @@ export class AiChat extends Component {
     async refreshSchema() {
         if (this.state.isRefreshingSchema) return;
         this.state.isRefreshingSchema = true;
+
+        // Notify user that refresh has started
+        this.notification.add("Schema refresh started. This may take a few moments...", {
+            type: "info",
+            title: "Processing",
+        });
+
         try {
             await this.orm.call("ask.odoo.model", "refresh_schema_index");
-            alert("✅ Schema Refreshed Successfully!");
+            this.notification.add("Schema Refreshed Successfully!", {
+                type: "success",
+                title: "Success",
+            });
         } catch (e) {
             console.error(e);
-            alert("❌ Failed to refresh schema: " + e.message);
+            this.notification.add("Failed to refresh schema: " + e.message, {
+                type: "danger",
+                title: "Error",
+            });
         } finally {
             this.state.isRefreshingSchema = false;
             this.state.isModeDropdownOpen = false;
@@ -178,7 +192,10 @@ export class AiChat extends Component {
                 console.error("File upload failed", e);
                 // 4. Error: Remove temp doc
                 this.state.documents = this.state.documents.filter(d => d.id !== tempId);
-                alert("Failed to upload document: " + (e.message || e));
+                this.notification.add("Failed to upload document: " + (e.message || e), {
+                    type: "danger",
+                    title: "Upload Failed",
+                });
             } finally {
                 // Reset file input
                 ev.target.value = "";
@@ -328,7 +345,10 @@ export class AiChat extends Component {
 
         } catch (e) {
             console.error(e);
-            alert("Execution Failed: " + e.message);
+            this.notification.add("Execution Failed: " + e.message, {
+                type: "danger",
+                title: "Execution Error",
+            });
         } finally {
             msg.executing = false;
             this.scrollToBottom();

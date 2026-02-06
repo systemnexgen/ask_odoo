@@ -31,9 +31,14 @@
                                         <i t-if="state.chatMode === 'database'" class="fa fa-check ms-auto text-success small"></i>
                                     </div>
                                     <div class="dropdown-divider my-1"></div>
-                                    <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer text-muted" t-on-click="refreshSchema">
+                                    <div t-attf-class="dropdown-item d-flex align-items-center p-2 px-3 {{ state.isRefreshingSchema ? 'disabled' : 'cursor-pointer' }} text-muted" 
+                                         t-on-click="refreshSchema"
+                                         t-att-style="state.isRefreshingSchema ? 'opacity: 0.6; pointer-events: none;' : ''">
                                         <i class="fa fa-refresh me-2" t-att-class="{'fa-spin': state.isRefreshingSchema}" style="width: 20px;"></i> 
-                                        <span>Refresh Schema</span>
+                                        <span>
+                                            <t t-if="state.isRefreshingSchema">Refreshing...</t>
+                                            <t t-else="">Refresh Schema</t>
+                                        </span>
                                     </div>
                                 </div>
                             </div>

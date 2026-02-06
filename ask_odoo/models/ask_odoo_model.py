@@ -404,7 +404,6 @@ class AskOdooModel(models.Model):
         )
         
         # # Google Gemini
-        # API_KEY = "AIzaSyDY2sLovBB-Mw9vkg0FoIE9yM8xXTgTGm4" 
         # print(f"Google API Key: {API_KEY}")
         # return ChatGoogleGenerativeAI(
         #     model="gemma-3-4b-it",
@@ -412,7 +411,7 @@ class AskOdooModel(models.Model):
         #     temperature=0.1
         # )
 
-        # # Ollama Implementation (Commented out)
+        # # Ollama Implementation
         # return ChatOllama(
         #     model="llama3.2:latest",
         #     temperature=0,
