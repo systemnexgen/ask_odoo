@@ -4,6 +4,7 @@ from odoo.tools.safe_eval import safe_eval
 import re
 import logging
 import json
+import base64
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -18,6 +19,7 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 _logger = logging.getLogger(__name__)
 
@@ -101,8 +103,10 @@ class AskOdooModel(models.Model):
                 "- WRAP ALL PYTHON CODE in a code block like:\n"
                 "```python\n"
                 "# Your code here\n"
-                "result = self.env['...'].search([...]) # Example for read\n"
+                "records = self.env['...'].search([...])\n"
+                "result = records.mapped('name') # Assign final output to result\n"
                 "```\n"
+                "- DO NOT use `print()`. It is not available. The value of `result` will be returned to the user.\n"
                 "- If reading data, assign the output to a variable named `result`.\n"
                 "- If the user asks for specific values (e.g. 'names'), ensure your code extracts them (e.g. `.mapped('name')`).\n"
                 "- REMEMBER: Every Odoo model AUTOMATICALLY has these fields: `id`, `create_date`, `create_uid`, `write_date`, `write_uid`. You can ALWAYS sort by `create_date`.\n"
@@ -188,6 +192,7 @@ class AskOdooModel(models.Model):
             
             result = local_context.get('result')
             
+            
             # Post-processing: If result is a RecordSet, make it readable
             if result is not None and hasattr(result, '_name') and hasattr(result, 'mapped'):
                 # It's an Odoo RecordSet
@@ -199,6 +204,21 @@ class AskOdooModel(models.Model):
                         result = result.mapped('display_name')
                     except:
                         result = str(result)
+            
+            # Convert dict_keys, dict_values, sets, and other iterables to lists for better formatting
+            if result is not None:
+                # Check for dict_keys, dict_values, or similar view objects
+                result_type = type(result).__name__
+                if result_type in ('dict_keys', 'dict_values', 'dict_items', 'set', 'frozenset'):
+                    result = list(result)
+                # Also handle generators and other iterables (but not strings!)
+                elif hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
+                    # Check if it's not already a list or tuple
+                    if not isinstance(result, (list, tuple)):
+                        try:
+                            result = list(result)
+                        except:
+                            pass  # Keep as-is if conversion fails
 
             return {
                 'status': 'success',
@@ -445,6 +465,11 @@ class AskOdooModel(models.Model):
 
             current_model = self.env[model_name]
             
+            # Skip Abstract and Transient models (Schema RAG should focus on persistent data)
+            # This filters out technical mixins like ir.websocket, base_import.mapping, etc.
+            if current_model._abstract or current_model._transient:
+                continue
+            
             # Extract fields dynamically from the model class
             # This includes custom fields (x_) and fields added by Studio
             model_fields = []
@@ -514,6 +539,10 @@ class AskOdooModel(models.Model):
         # 3. Select Top 30
         top_fields = business_fields[:30]
         
+        if not top_fields:
+            return None
+
+        
         # 4. Generate Field Strings
         field_lines = []
         for f in top_fields:
@@ -565,15 +594,15 @@ class AskOdooModel(models.Model):
         vector_store = self._get_schema_vector_store()
         return vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 5} # Retrieve top 5 relevant models
+            search_kwargs={"k": 10} # Retrieve top 10 to ensure we get related models
         )
 
     @api.model
     def refresh_schema_index(self):
         """
         Re-indexes the entire Odoo database schema into the vector store.
-        Warning: This might duplicate data if not cleared. 
-        In production, drop the table/collection first or use IDs.
+        Generates a single canonical text corpus (snapshot), saves it as an attachment,
+        then chunks and embeds from that corpus.
         """
         _logger.info("AskOdoo: Starting Schema Indexing...")
         
@@ -581,30 +610,84 @@ class AskOdooModel(models.Model):
         schemas = self._get_db_schema()
         _logger.info(f"AskOdoo: Found {len(schemas)} models.")
         
-        # 2. Convert to Documents
-        documents = []
+        # 2. Generate Canonical Text Corpus
+        # We join all model descriptions into one large text
+        corpus_parts = []
         for s in schemas:
             text_content = self._schema_to_text(s)
+            if text_content:
+                corpus_parts.append(text_content)
             
-            # Metadata for filtering/reference
-            meta = {
-                'model': s['model'],
-                'module': s['module'],
-                'name': s['name']
-            }
+        # Join with a separator that helps visualization handling
+        full_corpus = ("\n\n" + "="*50 + "\n\n").join(corpus_parts)
+        full_corpus += "\n\n" + "="*50 + "\n=== END OF SCHEMA SNAPSHOT ===\n"
+        
+        # 3. Save as Snapshot (ir.attachment) for Audit/Debug
+        # This serves as the 'source of truth' for the embedding
+        try:
+            # Cleanup old snapshots to avoid clutter
+            self.env['ir.attachment'].search([
+                ('description', '=', 'Canonical schema snapshot for AskOdoo RAG')
+            ]).unlink()
+            _logger.info("AskOdoo: Removed old schema snapshots.")
+
+            attachment_name = f"odoo_schema_snapshot_{fields.Datetime.now().isoformat().replace(':','-')}.txt"
+            b64_data = base64.b64encode(full_corpus.encode('utf-8'))
             
-            doc = Document(page_content=text_content, metadata=meta)
-            documents.append(doc)
+            self.env['ir.attachment'].create({
+                'name': attachment_name,
+                'type': 'binary',
+                'datas': b64_data,
+                'mimetype': 'text/plain',
+                'description': 'Canonical schema snapshot for AskOdoo RAG',
+            })
+            _logger.info(f"AskOdoo: Saved schema snapshot: {attachment_name}")
+        except Exception as e:
+            _logger.warning(f"AskOdoo: Failed to save schema snapshot attachment: {e}")
+
+        # 4. Chunk and Embed FROM THE CORPUS
+        # We use a text splitter on the full corpus
+        # Increased chunk size to 4000 to try and keep entire model definitions (like res.partner) intact
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=4000, 
+            chunk_overlap=200,
+            # Prioritize keeping models together usually, but follow size limits
+            separators=["\n\nOdoo Model:", "\n\n", "\n", " "] 
+        )
+        
+        texts = text_splitter.split_text(full_corpus)
+        
+        # Create Documents (metadata is lost in this massive chunking approach, 
+        # but content contains the model info)
+        documents = [Document(page_content=t, metadata={'source': 'schema_snapshot'}) for t in texts]
             
-        # 3. Add to Vector Store
+        # 5. Add to Vector Store
+        # 5. Add to Vector Store
         if documents:
             v_store = self._get_schema_vector_store()
             
-            # Logic to clear old collection would go here.
-            # v_store.delete_collection() # Hypothetical helper
+            # Clear existing collection to prevent duplicates
+            try:
+                v_store.delete_collection()
+                _logger.info("AskOdoo: Cleared existing schema collection.")
+                
+                # IMPORTANT: The collection is now gone from the DB.
+                # We MUST re-initialize the PGVector store so it recreates the collection.
+                # If we use the old 'v_store' object, it errors with "Collection not found".
+                AskOdooModel._schema_vector_store = None
+                v_store = self._get_schema_vector_store()
+                
+            except Exception as e:
+                # If collection didn't exist, that's fine.
+                # But we should ensure we have a valid store for adding.
+                _logger.warning(f"AskOdoo: Warning during collection cleanup: {e}")
+                # Optional: Force re-init if unsure, but usually only needed on success
+                if "not found" in str(e).lower():
+                     AskOdooModel._schema_vector_store = None
+                     v_store = self._get_schema_vector_store()
             
             v_store.add_documents(documents)
-            _logger.info(f"AskOdoo: Indexed {len(documents)} schema documents.")
+            _logger.info(f"AskOdoo: Indexed {len(documents)} schema chunks from snapshot.")
             
         return True
 
