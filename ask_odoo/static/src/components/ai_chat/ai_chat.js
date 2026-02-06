@@ -21,6 +21,9 @@ export class AiChat extends Component {
             sidebarOpen: true,
             currentView: 'chat',
             documents: [], // For Knowledge Base
+            chatMode: 'conversation',
+            isModeDropdownOpen: false,
+            isRefreshingSchema: false,
         });
         this.messagesEndRef = useRef("messagesEnd");
         this.fileInputRef = useRef("fileInput");
@@ -47,6 +50,30 @@ export class AiChat extends Component {
 
     toggleSidebar() {
         this.state.sidebarOpen = !this.state.sidebarOpen;
+    }
+
+    toggleModeDropdown() {
+        this.state.isModeDropdownOpen = !this.state.isModeDropdownOpen;
+    }
+
+    selectChatMode(mode) {
+        this.state.chatMode = mode;
+        this.state.isModeDropdownOpen = false;
+    }
+
+    async refreshSchema() {
+        if (this.state.isRefreshingSchema) return;
+        this.state.isRefreshingSchema = true;
+        try {
+            await this.orm.call("ask.odoo.model", "refresh_schema_index");
+            alert("✅ Schema Refreshed Successfully!");
+        } catch (e) {
+            console.error(e);
+            alert("❌ Failed to refresh schema: " + e.message);
+        } finally {
+            this.state.isRefreshingSchema = false;
+            this.state.isModeDropdownOpen = false;
+        }
     }
 
     switchToChat() {
@@ -236,7 +263,7 @@ export class AiChat extends Component {
             const result = await this.orm.call(
                 "ask.odoo.model",     // Model Name
                 "process_message",    // Method Name
-                [text, this.state.currentChatId] // Arguments
+                [text, this.state.currentChatId, this.state.chatMode] // Arguments
             );
 
             // Update Chat ID (essential if it was null/new)
@@ -249,6 +276,18 @@ export class AiChat extends Component {
                 type: 'ai',
                 avatar: '🤖'
             });
+
+            // Handle Action Confirmation (if code is returned)
+            if (result.action_code) {
+                this.state.messages.push({
+                    id: Date.now() + 2,
+                    type: 'confirmation',
+                    code: result.action_code,
+                    executed: false,
+                    cancelled: false,
+                    executing: false
+                });
+            }
 
             // Refresh sidebar if it was a new chat to show the new title
             if (isNewChat) {
@@ -267,6 +306,37 @@ export class AiChat extends Component {
             this.state.isTyping = false;
             this.scrollToBottom();
         }
+    }
+
+    async executeAction(msg) {
+        if (msg.executed || msg.cancelled) return;
+
+        msg.executing = true; // fast state update
+
+        try {
+            const result = await this.orm.call("ask.odoo.model", "execute_confirmed_code", [msg.code, this.state.currentChatId]);
+
+            msg.executed = true; // Mark as done blocks buttons
+
+            // Show Result
+            this.state.messages.push({
+                id: Date.now(),
+                text: result.status === 'success' ? `✅ **Action Executed:**\n${result.result}` : `❌ **Error:**\n${result.message}`,
+                type: 'ai', // reusing AI type for result display is fine
+                avatar: '⚙️'
+            });
+
+        } catch (e) {
+            console.error(e);
+            alert("Execution Failed: " + e.message);
+        } finally {
+            msg.executing = false;
+            this.scrollToBottom();
+        }
+    }
+
+    cancelAction(msg) {
+        msg.cancelled = true;
     }
 }
 

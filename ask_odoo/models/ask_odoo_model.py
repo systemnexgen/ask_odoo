@@ -1,5 +1,7 @@
 from odoo import models, fields, api
 from odoo.tools import config
+from odoo.tools.safe_eval import safe_eval
+import re
 import logging
 import json
 import os
@@ -15,6 +17,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.documents import Document
 
 _logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ class AskOdooModel(models.Model):
 
     # Embedding Model Cache
     _vector_store = None
+    _schema_vector_store = None
     _embeddings = None
 
 
@@ -39,6 +43,175 @@ class AskOdooModel(models.Model):
     # ==========================
     @api.model
     def process_message(self, message, conversation_id=None, chat_mode='conversation'):
+        if chat_mode == 'conversation':
+            return self.process_message_rag(message, conversation_id, chat_mode)
+        else:
+            return self.process_message_db(message, conversation_id)
+
+    def process_message_db(self, message, conversation_id=None):
+        """
+        Handles database / schema related queries using Schema RAG.
+        This does NOT execute CRUD yet — only explains models, fields, relations.
+        """
+        chat_mode = "database"
+        _logger.info("AskOdoo: Processing message in DATABASE mode")
+
+        # 1. Handle Conversation
+        if conversation_id:
+            conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
+        else:
+            conversation = self.env['ask.odoo.conversation'].create({
+                'name': 'New DB Chat',
+                'user_id': self.env.user.id
+            })
+
+        # 2. Save User Message
+        user_msg = self.env['ask.odoo.message'].create({
+            'conversation_id': conversation.id,
+            'type': 'user',
+            'content': message,
+        })
+
+        try:
+            # 3. Components
+            llm = self._get_llm()
+            retriever = self._get_schema_retriever()
+
+            history = self._get_history(conversation.id, exclude_id=user_msg.id)
+
+            # 4. Retrieve Schema Context
+            docs = retriever.invoke(message)
+
+            context_text = (
+                "\n\n".join(doc.page_content for doc in docs)
+                if docs else "No relevant schema found."
+            )
+
+            _logger.info(
+                f"\n=== [AskOdoo][DB MODE] Schema Context ===\n{context_text}\n========================================="
+            )
+
+            # 5. Database-Specific Prompt
+            system_template = (
+                "You are an Odoo Database Assistant capable of performing CRUD operations.\n\n"
+                "CRITICAL RULES:\n"
+                "- Use ONLY the schema information provided below.\n"
+                "- To READ data: Generate Odoo Python code using `self.env`.\n"
+                "- To CREATE/UPDATE/DELETE: Generate Odoo Python code using `self.env`.\n"
+                "- WRAP ALL PYTHON CODE in a code block like:\n"
+                "```python\n"
+                "# Your code here\n"
+                "result = self.env['...'].search([...]) # Example for read\n"
+                "```\n"
+                "- If reading data, assign the output to a variable named `result`.\n"
+                "- If the user asks for specific values (e.g. 'names'), ensure your code extracts them (e.g. `.mapped('name')`).\n"
+                "- REMEMBER: Every Odoo model AUTOMATICALLY has these fields: `id`, `create_date`, `create_uid`, `write_date`, `write_uid`. You can ALWAYS sort by `create_date`.\n"
+                "- Explain your action briefly before the code block.\n"
+                "- If something is not in the schema, say you don't know.\n\n"
+                "DATABASE SCHEMA DOCUMENTS:\n{context}"
+            )
+
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_template),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "{question}"),
+            ])
+
+            prompt_messages = prompt.format_messages(
+                context=context_text,
+                history=history,
+                question=message
+            )
+
+            _logger.info(
+                "\n=== [AskOdoo][DB MODE] Full Prompt ===\n" +
+                "\n".join(f"[{m.type.upper()}]: {m.content}" for m in prompt_messages) +
+                "\n====================================="
+            )
+
+            # 6. Invoke LLM
+            ai_message = llm.invoke(prompt_messages)
+            response_text = ai_message.content
+
+            _logger.info(
+                f"\n=== [AskOdoo][DB MODE] LLM Response ===\n{response_text}\n====================================="
+            )
+
+        except Exception as e:
+            _logger.exception("Database Mode Failed")
+            response_text = f"Error: {str(e)}"
+
+        # 7. Save AI Message
+        self.env['ask.odoo.message'].create({
+            'conversation_id': conversation.id,
+            'type': 'ai',
+            'content': response_text,
+        })
+
+        # 8. Update Conversation
+        conversation.write({'last_activity': fields.Datetime.now()})
+
+        if len(conversation.message_ids) <= 2:
+            conversation.write({
+                'name': message[:30] + "..." if len(message) > 30 else message
+            })
+
+        # 9. Extract Code if present
+        action_code = None
+        code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
+        if code_match:
+            action_code = code_match.group(1).strip()
+
+        return {
+            'response': response_text,
+            'conversation_id': conversation.id,
+            'title': conversation.name,
+            'action_code': action_code,
+        }
+
+    @api.model
+    def execute_confirmed_code(self, code, conversation_id):
+        """
+        Executes the confirmed Python code safely.
+        """
+        try:
+            local_context = {
+                'self': self,
+                'env': self.env,
+                'result': None,
+                'time': fields.Datetime.now,
+                'datetime': fields.Datetime,
+                'date': fields.Date,
+            }
+            # We use safe_eval but with full ORM access for the assistant
+            safe_eval(code, local_context, mode="exec", nocopy=True)
+            
+            result = local_context.get('result')
+            
+            # Post-processing: If result is a RecordSet, make it readable
+            if result is not None and hasattr(result, '_name') and hasattr(result, 'mapped'):
+                # It's an Odoo RecordSet
+                if not result:
+                    result = "No records found."
+                else:
+                    try:
+                        # Prefer display_name or name
+                        result = result.mapped('display_name')
+                    except:
+                        result = str(result)
+
+            return {
+                'status': 'success',
+                'result': str(result) if result is not None else "Action Executed Successfully"
+            }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
+
+
+    def process_message_rag(self, message, conversation_id=None, chat_mode='conversation'):
         """
         Main orchestrator using LangChain.
         """
@@ -211,7 +384,7 @@ class AskOdooModel(models.Model):
         )
         
         # # Google Gemini
-        # API_KEY = "key" 
+        # API_KEY = "AIzaSyDY2sLovBB-Mw9vkg0FoIE9yM8xXTgTGm4" 
         # print(f"Google API Key: {API_KEY}")
         # return ChatGoogleGenerativeAI(
         #     model="gemma-3-4b-it",
@@ -251,4 +424,187 @@ class AskOdooModel(models.Model):
                 
         _logger.info(f"Retrieved {len(history)} messages for history. IDs: {history_records.ids}")
         return history
+
+    def _get_db_schema(self):
+        """
+        Dynamically extracts schema metadata for all available models.
+        Returns a list of dictionaries describing models and their fields.
+        """
+        schema_data = []
+
+        # Iterate over all models registered in the database (ir.model)
+        # This ensures we get descriptions and module info from the database records
+        model_records = self.env['ir.model'].search([])
+
+        for record in model_records:
+            model_name = record.model
+            
+            # Ensure the model is currently accessible in the environment registry
+            if model_name not in self.env:
+                continue
+
+            current_model = self.env[model_name]
+            
+            # Extract fields dynamically from the model class
+            # This includes custom fields (x_) and fields added by Studio
+            model_fields = []
+            for field_name, field_obj in current_model._fields.items():
+                field_data = {
+                    'name': field_name,
+                    'type': field_obj.type,
+                    'string': field_obj.string,
+                    'relation': getattr(field_obj, 'comodel_name', None),
+                }
+                model_fields.append(field_data)
+
+            # Build metadata dictionary
+            model_metadata = {
+                'model': model_name,
+                'name': record.name,          # Human-readable description
+                'module': record.modules,     # Comma-separated list of modules defining this model
+                'fields': model_fields
+            }
+            
+            schema_data.append(model_metadata)
+
+        return schema_data
+
+    def _schema_to_text(self, model_metadata):
+        """
+        Converts a model's schema dictionary into a natural language text summary
+        suitable for embedding vectors.
+        Output format:
+        "Model: [Name] ([Technical Name])
+         Module: [Module]
+         Description: [Description]
+         Key Fields:
+         - [Field String] ([Field Name]): [Type] related to [Relation]"
+        """
+        # 1. Extract Basic Info
+        model_tech_name = model_metadata.get('model', 'Unknown')
+        model_name = model_metadata.get('name', model_tech_name)
+        module_name = model_metadata.get('module', 'Unknown')
+        
+        # 2. Filter & Prioritize Fields
+        # We want to focus on business logic fields, skipping standard audit fields for the summary
+        ignored_fields = {'id', 'create_uid', 'create_date', 'write_uid', 'write_date', '__last_update'}
+        
+        all_fields = model_metadata.get('fields', [])
+        
+        # Separate interesting fields from the rest
+        business_fields = [f for f in all_fields if f['name'] not in ignored_fields]
+        
+        # Sort heuristics: 
+        # 1. 'name' field is usually most important
+        # 2. 'state' or 'selection' fields (process status)
+        # 3. Relational fields (connections to other data)
+        # 4. Others
+        def field_importance(f):
+            name = f['name']
+            ftype = f['type']
+            
+            if name == 'name': return 0
+            if name == 'state': return 1
+            if ftype == 'selection': return 2
+            if ftype in ['many2one', 'one2many', 'many2many']: return 3
+            return 4
+
+        business_fields.sort(key=field_importance)
+        
+        # 3. Select Top 30
+        top_fields = business_fields[:30]
+        
+        # 4. Generate Field Strings
+        field_lines = []
+        for f in top_fields:
+            line = f"- {f['string']} ({f['name']}): {f['type']}"
+            if f.get('relation'):
+                line += f" -> {f['relation']}"
+            field_lines.append(line)
+            
+        # 5. Construct Final Text
+        # Note: We repeat the Model Name slightly to ensure the embedding captures it strongly
+        text = (
+            f"Odoo Model: {model_name}\n"
+            f"Technical Name: {model_tech_name}\n"
+            f"Module: {module_name}\n"
+            f"Key Fields:\n" + 
+            "\n".join(field_lines)
+        )
+        
+        return text
+
+    # ==========================
+    # SCHEMA VECTOR STORE
+    # ==========================
+
+    def _get_schema_vector_store(self):
+        """
+        Returns the PGVector store specifically for Database Schema.
+        Uses a separate collection 'ask_odoo_schema'.
+        """
+        if not AskOdooModel._schema_vector_store:
+            # Ensure Embeddings are ready
+            if not AskOdooModel._embeddings:
+                AskOdooModel._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+            connection = self._get_connection_string()
+            
+            AskOdooModel._schema_vector_store = PGVector(
+                embeddings=AskOdooModel._embeddings,
+                collection_name="ask_odoo_schema",
+                connection=connection,
+                use_jsonb=True,
+            )
+        return AskOdooModel._schema_vector_store
+
+    def _get_schema_retriever(self):
+        """
+        Returns a retriever for the schema vector store.
+        """
+        vector_store = self._get_schema_vector_store()
+        return vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 5} # Retrieve top 5 relevant models
+        )
+
+    @api.model
+    def refresh_schema_index(self):
+        """
+        Re-indexes the entire Odoo database schema into the vector store.
+        Warning: This might duplicate data if not cleared. 
+        In production, drop the table/collection first or use IDs.
+        """
+        _logger.info("AskOdoo: Starting Schema Indexing...")
+        
+        # 1. Get Metadata
+        schemas = self._get_db_schema()
+        _logger.info(f"AskOdoo: Found {len(schemas)} models.")
+        
+        # 2. Convert to Documents
+        documents = []
+        for s in schemas:
+            text_content = self._schema_to_text(s)
+            
+            # Metadata for filtering/reference
+            meta = {
+                'model': s['model'],
+                'module': s['module'],
+                'name': s['name']
+            }
+            
+            doc = Document(page_content=text_content, metadata=meta)
+            documents.append(doc)
+            
+        # 3. Add to Vector Store
+        if documents:
+            v_store = self._get_schema_vector_store()
+            
+            # Logic to clear old collection would go here.
+            # v_store.delete_collection() # Hypothetical helper
+            
+            v_store.add_documents(documents)
+            _logger.info(f"AskOdoo: Indexed {len(documents)} schema documents.")
+            
+        return True
 

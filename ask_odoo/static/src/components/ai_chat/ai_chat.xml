@@ -8,9 +8,34 @@
                     <!-- Sidebar -->
                     <div t-attf-class="o_ai_sidebar d-flex flex-column {{ state.sidebarOpen ? 'p-3' : 'collapsed' }}">
                         
-                        <div class="o_sidebar_header d-flex align-items-center mb-3">
-                            <div class="d-flex align-items-center fw-bold fs-5 text-muted cursor-pointer">
-                                AskOdoo <i class="fa fa-chevron-down ms-2" style="font-size: 0.8rem;"></i>
+                        <div class="o_sidebar_header d-flex align-items-center mb-3 justify-content-between">
+                            <div class="position-relative">
+                                <div class="d-flex align-items-center fw-bold fs-5 text-muted cursor-pointer user-select-none" t-on-click="toggleModeDropdown">
+                                    <span>
+                                        <t t-if="state.chatMode === 'database'">Database</t>
+                                        <t t-else="">Conversation</t>
+                                    </span>
+                                    <i class="fa fa-chevron-down ms-2" style="font-size: 0.8rem; transition: transform 0.2s;" t-att-style="state.isModeDropdownOpen ? 'transform: rotate(180deg);' : ''"></i>
+                                </div>
+                                
+                                <!-- Dropdown Menu -->
+                                <div t-if="state.isModeDropdownOpen" class="o_mode_dropdown position-absolute top-100 start-0 bg-white border rounded shadow-lg py-2 mt-2" style="z-index: 1000; min-width: 180px;">
+                                    <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer" t-on-click="() => this.selectChatMode('conversation')">
+                                        <i class="fa fa-comments-o me-2 text-primary" style="width: 20px;"></i> 
+                                        <span>Conversation</span>
+                                        <i t-if="state.chatMode === 'conversation'" class="fa fa-check ms-auto text-success small"></i>
+                                    </div>
+                                    <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer" t-on-click="() => this.selectChatMode('database')">
+                                        <i class="fa fa-database me-2 text-warning" style="width: 20px;"></i> 
+                                        <span>Database</span>
+                                        <i t-if="state.chatMode === 'database'" class="fa fa-check ms-auto text-success small"></i>
+                                    </div>
+                                    <div class="dropdown-divider my-1"></div>
+                                    <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer text-muted" t-on-click="refreshSchema">
+                                        <i class="fa fa-refresh me-2" t-att-class="{'fa-spin': state.isRefreshingSchema}" style="width: 20px;"></i> 
+                                        <span>Refresh Schema</span>
+                                    </div>
+                                </div>
                             </div>
                             <button class="btn btn-link text-muted p-0 border-0" t-on-click="toggleSidebar" title="Close Sidebar">
                                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sidebar">
@@ -73,7 +98,41 @@
                                 <!-- Messages Area -->
                                 <div t-else="" class="o_ai_chat_container w-100 p-4 pb-5">
                                     <t t-foreach="state.messages" t-as="message" t-key="message.id">
-                                        <div t-attf-class="d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
+                                        
+                                        <!-- CONFIRMATION MESSAGE -->
+                                        <t t-if="message.type === 'confirmation'">
+                                            <div class="d-flex mb-4 justify-content-start w-100 ps-lg-5">
+                                                <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #ff9800; min-width: 30px;">
+                                                    <i class="fa fa-terminal text-white small"></i>
+                                                </div>
+                                                <div class="o_message_bubble p-0 rounded-3 border bg-white shadow-sm overflow-hidden" style="max-width: 85%; width: 100%;">
+                                                    <div class="p-2 border-bottom bg-light d-flex justify-content-between align-items-center">
+                                                        <span class="small fw-bold text-uppercase text-muted"><i class="fa fa-code me-1"></i> Proposed Action</span>
+                                                    </div>
+                                                    <div class="p-3 bg-light bg-opacity-10 code-block" style="background: #f8f9fa;">
+                                                        <pre class="m-0 small text-dark p-2" style="white-space: pre-wrap; font-family: monospace;"><t t-esc="message.code"/></pre>
+                                                    </div>
+                                                    <div class="p-2 border-top bg-white d-flex justify-content-end gap-2">
+                                                        <t t-if="!message.executed and !message.cancelled">
+                                                            <button class="btn btn-sm btn-outline-secondary" t-on-click="() => this.cancelAction(message)" t-att-disabled="message.executing">Cancel</button>
+                                                            <button class="btn btn-sm btn-primary d-flex align-items-center" t-on-click="() => this.executeAction(message)" t-att-disabled="message.executing">
+                                                                <i t-if="message.executing" class="fa fa-circle-o-notch fa-spin me-2"></i>
+                                                                <span>Execute</span>
+                                                            </button>
+                                                        </t>
+                                                        <t t-elif="message.executed">
+                                                            <span class="badge bg-success text-white py-2 px-3">Executed</span>
+                                                        </t>
+                                                        <t t-elif="message.cancelled">
+                                                            <span class="badge bg-secondary text-white py-2 px-3">Cancelled</span>
+                                                        </t>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+
+                                        <!-- STANDARD MESSAGES -->
+                                        <div t-else="" t-attf-class="d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
                                             
                                             <div t-if="message.type === 'ai'" class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #19c37d;">
                                                 <i class="fa fa-bolt text-white small"></i>
