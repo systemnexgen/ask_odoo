@@ -108,12 +108,15 @@ class AskOdooModel(models.Model):
                 "```\n"
                 "- DO NOT use `print()`. It is not available. The value of `result` will be returned to the user.\n"
                 "- If reading data, assign the output to a variable named `result`.\n"
+                "- When searching for a specific record ID (like partner_id or product_id), ALWAYS use `limit=1` in the search (e.g. `.search([...], limit=1).id`) to avoid 'Expected Singleton' errors.\n"
+                
                 "- If the user asks for specific values (e.g. 'names'), ensure your code extracts them (e.g. `.mapped('name')`).\n"
                 "- REMEMBER: Every Odoo model AUTOMATICALLY has these fields: `id`, `create_date`, `create_uid`, `write_date`, `write_uid`. You can ALWAYS sort by `create_date`.\n"
                 "- Explain your action briefly before the code block.\n"
                 "- If something is not in the schema, say you don't know.\n\n"
                 "DATABASE SCHEMA DOCUMENTS:\n{context}"
             )
+
 
             prompt = ChatPromptTemplate.from_messages([
                 ("system", system_template),
@@ -174,6 +177,45 @@ class AskOdooModel(models.Model):
         }
 
     @api.model
+    def _explain_error_to_user(self, code, error_message):
+        """
+        Uses the LLM to explain a Python error to the user in simple terms.
+        """
+        try:
+            llm = self._get_llm()
+            
+            system_template = (
+                "You are a helpful Odoo Assistant.\n"
+                "The user tried to execute some code, but it failed with an error.\n"
+                "Your task is to explain the error to the user in simple, non-technical words.\n"
+                "CRITICAL: Keep your explanation SHORT and TO THE POINT. Long explanations confuse the user.\n"
+                "Do NOT just repeat the error message. Do not explain the code line-by-line.\n"
+                "Explain precisely WHAT went wrong (e.g. 'We couldn't find a partner with that name' or 'There are multiple products with that name...').\n"
+                "Then, ask the user to provide the missing information or correct the details so we can try again.\n"
+            )
+            
+            human_template = (
+                "Here is the code that was executed:\n"
+                "```python\n{code}\n```\n\n"
+                "Here is the error message:\n"
+                "{error}\n\n"
+                "Please explain this to the user and tell them what to do next."
+            )
+            
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", system_template),
+                ("human", human_template),
+            ])
+            
+            messages = prompt.format_messages(code=code, error=error_message)
+            
+            response = llm.invoke(messages)
+            return response.content
+        except Exception as e:
+            _logger.error(f"Failed to explain error with LLM: {e}")
+            return f"Error: {error_message}"
+
+    @api.model
     def execute_confirmed_code(self, code, conversation_id):
         """
         Executes the confirmed Python code safely.
@@ -225,9 +267,13 @@ class AskOdooModel(models.Model):
                 'result': str(result) if result is not None else "Action Executed Successfully"
             }
         except Exception as e:
+            _logger.exception("Execution Error")
+            # Generate user-friendly explanation
+            friendly_error = self._explain_error_to_user(code, str(e))
             return {
                 'status': 'error',
-                'message': str(e)
+                'message': friendly_error,
+                'debug_message': str(e)
             }
 
 
@@ -396,7 +442,7 @@ class AskOdooModel(models.Model):
     def _get_llm(self):
         # Groq Implementation
         GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-        print(f"Groq API Key: {GROQ_API_KEY}")
+        # print(f"Groq API Key: {GROQ_API_KEY}")
         return ChatGroq(
             model="llama-3.1-8b-instant",
             groq_api_key=GROQ_API_KEY,
@@ -443,55 +489,6 @@ class AskOdooModel(models.Model):
                 
         _logger.info(f"Retrieved {len(history)} messages for history. IDs: {history_records.ids}")
         return history
-
-    def _get_db_schema(self):
-        """
-        Dynamically extracts schema metadata for all available models.
-        Returns a list of dictionaries describing models and their fields.
-        """
-        schema_data = []
-
-        # Iterate over all models registered in the database (ir.model)
-        # This ensures we get descriptions and module info from the database records
-        model_records = self.env['ir.model'].search([])
-
-        for record in model_records:
-            model_name = record.model
-            
-            # Ensure the model is currently accessible in the environment registry
-            if model_name not in self.env:
-                continue
-
-            current_model = self.env[model_name]
-            
-            # Skip Abstract and Transient models (Schema RAG should focus on persistent data)
-            # This filters out technical mixins like ir.websocket, base_import.mapping, etc.
-            if current_model._abstract or current_model._transient:
-                continue
-            
-            # Extract fields dynamically from the model class
-            # This includes custom fields (x_) and fields added by Studio
-            model_fields = []
-            for field_name, field_obj in current_model._fields.items():
-                field_data = {
-                    'name': field_name,
-                    'type': field_obj.type,
-                    'string': field_obj.string,
-                    'relation': getattr(field_obj, 'comodel_name', None),
-                }
-                model_fields.append(field_data)
-
-            # Build metadata dictionary
-            model_metadata = {
-                'model': model_name,
-                'name': record.name,          # Human-readable description
-                'module': record.modules,     # Comma-separated list of modules defining this model
-                'fields': model_fields
-            }
-            
-            schema_data.append(model_metadata)
-
-        return schema_data
 
     def _schema_to_text(self, model_metadata):
         """
@@ -550,7 +547,15 @@ class AskOdooModel(models.Model):
                 line += f" -> {f['relation']}"
             field_lines.append(line)
             
-        # 5. Construct Final Text
+        # 5. Generate Method Strings
+        method_lines = []
+        # Limit to top 20 methods to avoid context overflow, though usually there aren't that many action_ methods per model
+        top_methods = model_metadata.get('methods', [])[:20]
+        
+        for m in top_methods:
+            method_lines.append(f"- {m['name']}: {m['description']}")
+
+        # 6. Construct Final Text
         # Note: We repeat the Model Name slightly to ensure the embedding captures it strongly
         text = (
             f"Odoo Model: {model_name}\n"
@@ -560,7 +565,79 @@ class AskOdooModel(models.Model):
             "\n".join(field_lines)
         )
         
+        if method_lines:
+            text += "\nKey Methods (Callable Actions):\n" + "\n".join(method_lines)
+        
         return text
+
+    def _get_db_schema(self):
+        """
+        Dynamically extracts schema metadata for all available models.
+        Returns a list of dictionaries describing models and their fields.
+        """
+        schema_data = []
+
+        # Iterate over all models registered in the database (ir.model)
+        # This ensures we get descriptions and module info from the database records
+        model_records = self.env['ir.model'].search([])
+
+        for record in model_records:
+            model_name = record.model
+            
+            # Ensure the model is currently accessible in the environment registry
+            if model_name not in self.env:
+                continue
+
+            current_model = self.env[model_name]
+            
+            # Skip Abstract and Transient models (Schema RAG should focus on persistent data)
+            # This filters out technical mixins like ir.websocket, base_import.mapping, etc.
+            if current_model._abstract or current_model._transient:
+                continue
+            
+            # Extract fields dynamically from the model class
+            # This includes custom fields (x_) and fields added by Studio
+            model_fields = []
+            for field_name, field_obj in current_model._fields.items():
+                field_data = {
+                    'name': field_name,
+                    'type': field_obj.type,
+                    'string': field_obj.string,
+                    'relation': getattr(field_obj, 'comodel_name', None),
+                }
+                model_fields.append(field_data)
+
+            # Extract methods dynamically
+            # We look for methods starting with 'action_' or 'button_' which usually denote business logic
+            model_methods = []
+            # Use dir() to get all attributes, but we need to be careful about what we access
+            # We only check attributes that exist on the class/recordset
+            for attr_name in dir(current_model):
+                if attr_name.startswith(('action_', 'button_')) and not attr_name.startswith('_'):
+                    try:
+                        attr = getattr(current_model, attr_name)
+                        if callable(attr):
+                            # Get the first line of the docstring as description
+                            doc = (attr.__doc__ or "").strip().split('\n')[0]
+                            model_methods.append({
+                                'name': attr_name,
+                                'description': doc or "No description available."
+                            })
+                    except:
+                        continue
+
+            # Build metadata dictionary
+            model_metadata = {
+                'model': model_name,
+                'name': record.name,          # Human-readable description
+                'module': record.modules,     # Comma-separated list of modules defining this model
+                'fields': model_fields,
+                'methods': model_methods      # Include the extracted methods
+            }
+            
+            schema_data.append(model_metadata)
+
+        return schema_data
 
     # ==========================
     # SCHEMA VECTOR STORE
@@ -593,7 +670,7 @@ class AskOdooModel(models.Model):
         vector_store = self._get_schema_vector_store()
         return vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 10} # Retrieve top 10 to ensure we get related models
+            search_kwargs={"k": 5} # Retrieve top 10 to ensure we get related models
         )
 
     @api.model
