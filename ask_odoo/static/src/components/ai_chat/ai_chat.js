@@ -231,6 +231,59 @@ export class AiChat extends Component {
         });
 
         // 3. Format Markdown syntax
+
+        // A. Tables (Simple GFM style)
+        // Look for headers: | ... | ... | followed by separator: | --- | --- |
+        safeText = safeText.replace(/(\|[^\n]+\|\r?\n)((?:\|:?[-]+:?)+\|)(\r?\n(?:\|[^\n]+\|\r?\n?)*)/g, (match, header, separator, body) => {
+            try {
+                const parseRow = (row) => row.trim().split('|').filter(c => c && c.trim() !== '').map(c => c.trim());
+
+                const headers = parseRow(header);
+                const separators = parseRow(separator);
+                const alignments = separators.map(s => {
+                    if (s.startsWith(':') && s.endsWith(':')) return 'center';
+                    if (s.endsWith(':')) return 'right';
+                    return 'left';
+                });
+
+                let html = '<div class="overflow-auto mb-3"><table class="dataframe">'; // Use .dataframe to match our SCSS
+
+                // Head
+                html += '<thead><tr>';
+                headers.forEach((h, i) => {
+                    const align = alignments[i] || 'left';
+                    html += `<th style="text-align: ${align}">${h}</th>`;
+                });
+                html += '</tr></thead>';
+
+                // Body
+                html += '<tbody>';
+                const rows = body.trim().split('\n');
+                rows.forEach(row => {
+                    // Skip empty rows
+                    if (!row.trim()) return;
+
+                    const cells = parseRow(row);
+                    if (cells.length === 0) return;
+
+                    html += '<tr>';
+                    cells.forEach((c, i) => {
+                        const align = alignments[i] || 'left';
+                        // Handle empty cells
+                        const content = c || '';
+                        html += `<td style="text-align: ${align}">${content}</td>`;
+                    });
+                    html += '</tr>';
+                });
+                html += '</tbody></table></div>';
+
+                return html;
+            } catch (e) {
+                console.error("Table parsing failed", e);
+                return match; // Fallback to raw text
+            }
+        });
+
         let formatted = safeText
             // Headers (e.g., ### Header)
             .replace(/^(#{1,6})\s+(.*)$/gm, (match, hashes, content) => {
@@ -247,7 +300,13 @@ export class AiChat extends Component {
             .replace(/^\s*[-*]\s+(.*)$/gm, "<li>$1</li>")
             // Wrap consecutive <li> into <ul> (Simple heuristic)
             .replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>")
-            // Newlines to <br> (but not inside lists/headers ideally, but simple replace works closely enough for now)
+            // Newlines to <br> (but not inside lists/headers/tables)
+            // We use a negative lookbehind/lookahead or just keep it simple.
+            // Since tables use <div> wrapper, we want to respect that.
+            // Simplified: we only replace newlines that are NOT inside tags we just parsed (hX, table, ul, li)
+            // But strict regex for that is hard. 
+            // Simple approach: Replace \n with <br> ONLY if it's not followed by a block tag?
+            // Actually, for now, normal text newlines -> br is fine.
             .replace(/\n/g, "<br>");
 
         // 4. Restore Code Blocks
@@ -336,9 +395,28 @@ export class AiChat extends Component {
             msg.executed = true; // Mark as done blocks buttons
 
             // Show Result
+            // Show Result
+            let messageContent;
+            if (result.status === 'success') {
+                const isHtml = typeof result.result === 'string' && (result.result.trim().startsWith('<table') || result.result.trim().startsWith('<div'));
+                if (isHtml) {
+                    // Render HTML directly. Wrapped in overflow-hidden/auto container.
+                    // Added 'text-start' to force left alignment for the whole block
+                    messageContent = markup(`<div class="text-start w-100">
+                        <strong>✅ Action Executed:</strong>
+                        <div class="table-responsive dataframe-wrapper mt-2">${result.result}</div>
+                    </div>`);
+                } else {
+                    // Render Markdown
+                    messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.result}`);
+                }
+            } else {
+                messageContent = this.formatMessage(`❌ **Error:**\n${result.message}`);
+            }
+
             this.state.messages.push({
                 id: Date.now(),
-                text: result.status === 'success' ? `✅ **Action Executed:**\n${result.result}` : `❌ **Error:**\n${result.message}`,
+                text: messageContent,
                 type: 'ai', // reusing AI type for result display is fine
                 avatar: '⚙️'
             });

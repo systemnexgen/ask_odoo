@@ -6,6 +6,7 @@ import logging
 import json
 import base64
 import os
+import pandas as pd
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -108,6 +109,9 @@ class AskOdooModel(models.Model):
                 "```\n"
                 "- DO NOT use `print()`. It is not available. The value of `result` will be returned to the user.\n"
                 "- If reading data, assign the output to a variable named `result`.\n"
+                "- TO DISPLAY A TABLE: Return a list of dictionaries (keys become headers) OR a list of lists where the first list is the header row.\n"
+                "  Example Dict: `result = [{{'Name': r.name, 'Total': r.amount}} for r in records]`\n"
+                "  Example List: `result = [['Name', 'Total']] + [[r.name, r.amount] for r in records]`\n"
                 "- When searching for a specific record ID (like partner_id or product_id), ALWAYS use `limit=1` in the search (e.g. `.search([...], limit=1).id`) to avoid 'Expected Singleton' errors.\n"
                 
                 "- If the user asks for specific values (e.g. 'names'), ensure your code extracts them (e.g. `.mapped('name')`).\n"
@@ -262,9 +266,38 @@ class AskOdooModel(models.Model):
                         except:
                             pass  # Keep as-is if conversion fails
 
+            # Try to convert lists to HTML tables using Pandas
+            if isinstance(result, (list, tuple)):
+                try:
+                    if not result:
+                        result = "No records found."
+                    else:
+                        df = pd.DataFrame(result)
+
+                        # Check if result is a List of Lists (and not empty)
+                        # If the first row looks like headers (all strings), promote it
+                        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
+                            first_row = result[0]
+                            if first_row and all(isinstance(x, str) for x in first_row):
+                                # Treat first row as headers
+                                df = pd.DataFrame(result[1:], columns=first_row)
+
+                        # Fix for simple lists becoming column "0" - rename to "Result" if single column
+                        if len(df.columns) == 1 and str(df.columns[0]) == '0':
+                            df.columns = ['Result']
+                            
+                        # border=0 to let CSS handle it
+                        # classes='dataframe' to ensure our CSS target hits it
+                        result = df.to_html(index=False, border=0, classes='dataframe')
+                except Exception:
+                    # Fallback to string representation if conversion fails
+                    result = str(result)
+            else:
+                result = str(result) if result is not None else "Action Executed Successfully"
+
             return {
                 'status': 'success',
-                'result': str(result) if result is not None else "Action Executed Successfully"
+                'result': result
             }
         except Exception as e:
             _logger.exception("Execution Error")
@@ -492,82 +525,66 @@ class AskOdooModel(models.Model):
 
     def _schema_to_text(self, model_metadata):
         """
-        Converts a model's schema dictionary into a natural language text summary
-        suitable for embedding vectors.
-        Output format:
-        "Model: [Name] ([Technical Name])
-         Module: [Module]
-         Description: [Description]
-         Key Fields:
-         - [Field String] ([Field Name]): [Type] related to [Relation]"
+        Converts model schema to text, HIGHLY OPTIMIZED to reduce token usage.
+        Excludes technical mixin fields and UI-only methods.
         """
-        # 1. Extract Basic Info
-        model_tech_name = model_metadata.get('model', 'Unknown')
-        model_name = model_metadata.get('name', model_tech_name)
-        module_name = model_metadata.get('module', 'Unknown')
+        # 1. Basic Info
+        model_name = model_metadata.get('name', model_metadata.get('model'))
+        model_tech_name = model_metadata.get('model')
         
-        # 2. Filter & Prioritize Fields
-        # We want to focus on business logic fields, skipping standard audit fields for the summary
-        ignored_fields = {'id', 'create_uid', 'create_date', 'write_uid', 'write_date', '__last_update'}
-        
-        all_fields = model_metadata.get('fields', [])
-        
-        # Separate interesting fields from the rest
-        business_fields = [f for f in all_fields if f['name'] not in ignored_fields]
-        
-        # Sort heuristics: 
-        # 1. 'name' field is usually most important
-        # 2. 'state' or 'selection' fields (process status)
-        # 3. Relational fields (connections to other data)
-        # 4. Others
-        def field_importance(f):
-            name = f['name']
-            ftype = f['type']
+        # 2. DEFINITION OF NOISE
+        # These fields consume tokens but provide zero value for business logic queries
+        IGNORED_FIELDS = {
+            # Standard Audit
+            'id', 'create_uid', 'create_date', 'write_uid', 'write_date', '__last_update',
+            # Mail Thread / Activities (Massive Token Bloat)
+            'message_ids', 'message_follower_ids', 'message_partner_ids', 'message_channel_ids',
+            'message_is_follower', 'message_needaction', 'message_needaction_counter',
+            'message_has_error', 'message_has_error_counter', 'message_attachment_count',
+            'message_main_attachment_id', 'website_message_ids', 'has_message',
+            'activity_ids', 'activity_state', 'activity_user_id', 'activity_type_id',
+            'activity_date_deadline', 'activity_summary', 'activity_exception_decoration',
+            'activity_exception_icon', 'my_activity_date_deadline', 'activity_type_icon',
+            # View/UI specific
+            'display_name', 'display_name_check',
+        }
+
+        # 3. Filter Fields
+        relevant_fields = []
+        for f in model_metadata.get('fields', []):
+            if f['name'] in IGNORED_FIELDS:
+                continue
             
-            if name == 'name': return 0
-            if name == 'state': return 1
-            if ftype == 'selection': return 2
-            if ftype in ['many2one', 'one2many', 'many2many']: return 3
-            return 4
-
-        business_fields.sort(key=field_importance)
-        
-        # 3. Select Top 30
-        top_fields = business_fields[:30]
-        
-        if not top_fields:
-            return None
-
-        
-        # 4. Generate Field Strings
-        field_lines = []
-        for f in top_fields:
-            line = f"- {f['string']} ({f['name']}): {f['type']}"
+            # Formatting: "Name (tech_name): type"
+            # If relation exists, add "-> RelatedModel"
+            desc = f"- {f['string']} ({f['name']}): {f['type']}"
             if f.get('relation'):
-                line += f" -> {f['relation']}"
-            field_lines.append(line)
-            
-        # 5. Generate Method Strings
-        method_lines = []
-        # Limit to top 20 methods to avoid context overflow, though usually there aren't that many action_ methods per model
-        top_methods = model_metadata.get('methods', [])[:20]
-        
-        for m in top_methods:
-            method_lines.append(f"- {m['name']}: {m['description']}")
+                desc += f" -> {f['relation']}"
+            relevant_fields.append(desc)
 
-        # 6. Construct Final Text
-        # Note: We repeat the Model Name slightly to ensure the embedding captures it strongly
-        text = (
-            f"Odoo Model: {model_name}\n"
-            f"Technical Name: {model_tech_name}\n"
-            f"Module: {module_name}\n"
-            f"Key Fields:\n" + 
-            "\n".join(field_lines)
-        )
+        # Limit to top 40 most relevant fields to prevent context overflow on huge models (like res.partner)
+        # (You can implement a sorter here to prioritize required fields if needed)
+        relevant_fields = relevant_fields[:40]
+
+        # 4. Filter Methods
+        relevant_methods = []
+        for m in model_metadata.get('methods', []):
+            name = m['name']
+            
+            # Skip UI actions (opening views/wizards) and standard mixin methods
+            if any(prefix in name for prefix in ['action_view_', 'action_open_', 'action_see_', '_compute_', '_get_']):
+                continue
+                
+            # Keep only "Business Logic" actions (confirm, cancel, draft, send, etc.)
+            relevant_methods.append(f"- {name}")
+
+        # 5. Construct Compact Text
+        # We strip unnecessary newlines and labels to save tokens
+        text = f"Model: {model_name} ({model_tech_name})\nFields:\n" + "\n".join(relevant_fields)
         
-        if method_lines:
-            text += "\nKey Methods (Callable Actions):\n" + "\n".join(method_lines)
-        
+        if relevant_methods:
+            text += "\nMethods:\n" + "\n".join(relevant_methods)
+
         return text
 
     def _get_db_schema(self):

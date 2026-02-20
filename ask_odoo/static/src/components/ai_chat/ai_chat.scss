@@ -373,6 +373,7 @@
             }
         }
     }
+
     // --- Mode Dropdown Animation ---
     .o_mode_dropdown {
         animation: slideDown 0.2s ease-out;
@@ -381,23 +382,23 @@
         .dropdown-item {
             transition: all 0.2s ease;
             font-size: 0.9rem;
-            
+
             &:hover {
                 background-color: #f3f4f6;
             }
         }
     }
-    
+
     &.o_dark_mode .o_mode_dropdown {
         background-color: #202123 !important;
         border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        
+
         .dropdown-item {
-             color: #ececf1;
-             
-             &:hover {
-                 background-color: #343541;
-             }
+            color: #ececf1;
+
+            &:hover {
+                background-color: #343541;
+            }
         }
     }
 
@@ -406,9 +407,120 @@
             opacity: 0;
             transform: translateY(-8px);
         }
+
         to {
             opacity: 1;
             transform: translateY(0);
+        }
+    }
+
+    // --- DataFrame / Table Styling ---
+    .o_message_bubble {
+
+        // Wrapper for scrolling (created in JS)
+        .table-responsive,
+        .overflow-auto {
+            margin-top: 8px;
+            margin-bottom: 0px; // Remove bottom margin as requested
+            border-radius: 4px;
+            border: 1px solid #dee2e6;
+        }
+
+        table.dataframe {
+            width: 100%;
+            border-collapse: collapse;
+            border-spacing: 0; // Explicitly remove spacing
+            font-size: 0.85rem;
+            margin: 0; // Remove all margins on table itself
+            border: none; // Border is on container now to clip corners cleanly
+
+            thead {
+                background-color: #f8f9fa;
+                // No border-bottom here if we want seamless look, or keep it
+                border-bottom: 1px solid #dee2e6; // Thinner border
+
+
+                th {
+                    padding: 12px 16px;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                    font-size: 0.75rem;
+                    color: #495057; // Darker gray for better contrast
+                    text-align: left;
+                    white-space: nowrap;
+                    border-right: 1px solid #dee2e6;
+
+                    &:last-child {
+                        border-right: none;
+                    }
+                }
+            }
+
+            tbody {
+                tr {
+                    background-color: #ffffff;
+                    border-bottom: 1px solid #dee2e6;
+                    transition: background-color 0.1s ease;
+
+                    // Simple white rows as per image, or subtle alternating
+                    // The image seems to have white rows with borders.
+
+                    &:hover {
+                        background-color: #f8f9fa;
+                    }
+
+                    td {
+                        padding: 10px 16px;
+                        color: #212529;
+                        vertical-align: middle;
+                        border-right: 1px solid #dee2e6;
+
+                        &:last-child {
+                            border-right: none;
+                        }
+                    }
+
+                    &:last-child {
+                        border-bottom: none;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Dark Mode Table Overrides ---
+    &.o_dark_mode {
+        .o_message_bubble {
+            table.dataframe {
+                border-color: #565869;
+
+                thead {
+                    background-color: #40414f;
+                    border-bottom-color: #565869;
+
+                    th {
+                        color: #ececf1;
+                        background-color: #40414f;
+                        border-right-color: #565869;
+                    }
+                }
+
+                tbody {
+                    tr {
+                        background-color: #343541 !important;
+                        border-bottom-color: #565869;
+
+                        &:hover {
+                            background-color: #40414f !important;
+                        }
+
+                        td {
+                            color: #d1d5db;
+                            border-right-color: #565869;
+                        }
+                    }
+                }
+            }
         }
     }
 }
