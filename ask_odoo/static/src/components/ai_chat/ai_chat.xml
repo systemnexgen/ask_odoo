@@ -58,9 +58,20 @@
                         <div class="flex-grow-1 overflow-auto conversations-list custom-scrollbar">
                             <div class="text-muted small mb-2 text-uppercase fw-bold" style="font-size: 0.75rem;">Today</div>
                             <t t-foreach="state.conversations" t-as="chat" t-key="chat.id">
-                                <div t-attf-class="o_sidebar_item p-2 rounded mb-1 cursor-pointer text-truncate {{ state.currentChatId === chat.id ? 'active' : '' }}"
+                                <div t-attf-class="o_sidebar_item p-2 rounded mb-1 cursor-pointer d-flex align-items-center {{ state.currentChatId === chat.id ? 'active' : '' }}"
                                      t-on-click="() => this.selectChat(chat.id)">
-                                    <t t-esc="chat.title"/>
+                                    <span class="text-truncate flex-grow-1"><t t-esc="chat.title"/></span>
+                                    <!-- Three dots menu (visible on hover via CSS) -->
+                                    <div class="o_chat_menu position-relative ms-1" t-on-click.stop="() => this.toggleChatMenu(chat.id)">
+                                        <i class="fa fa-ellipsis-v text-muted px-1"></i>
+                                        <!-- Dropdown -->
+                                        <div t-if="state.openMenuChatId === chat.id" class="o_chat_dropdown position-absolute end-0 bg-white border rounded shadow-sm py-1" style="z-index: 1000; min-width: 130px; top: 100%;">
+                                            <div class="dropdown-item d-flex align-items-center px-3 py-2 cursor-pointer text-danger small" t-on-click.stop="() => this.deleteConversation(chat.id)">
+                                                <i class="fa fa-trash-o me-2"></i>
+                                                <span>Delete</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </t>
                         </div>
@@ -167,9 +178,6 @@
                             <div class="o_chat_input_section w-100 p-4">
                                 <div class="o_ai_chat_input_container mx-auto position-relative">
                                     <div class="input-group shadow-sm rounded-4 overflow-hidden border">
-                                        <button class="btn border-0 ps-3" type="button">
-                                            <i class="fa fa-plus-circle fa-lg text-muted"></i>
-                                        </button>
                                         <input type="text" 
                                             class="form-control border-0 p-3 shadow-none" 
                                             placeholder="Message AskOdoo..." 

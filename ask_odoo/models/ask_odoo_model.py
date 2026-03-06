@@ -566,6 +566,14 @@ class AskOdooModel(models.Model):
             'type': m.type
         } for m in messages]
 
+    @api.model
+    def delete_conversation(self, conversation_id):
+        """Delete a conversation and all its messages (cascade)."""
+        conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
+        if conversation.exists():
+            conversation.unlink()
+        return True
+
     # ==========================
     # HELPERS
     # ==========================

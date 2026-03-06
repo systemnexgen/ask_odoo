@@ -25,6 +25,7 @@ export class AiChat extends Component {
             chatMode: 'conversation',
             isModeDropdownOpen: false,
             isRefreshingSchema: false,
+            openMenuChatId: null,
         });
         this.messagesEndRef = useRef("messagesEnd");
         this.fileInputRef = useRef("fileInput");
@@ -111,6 +112,30 @@ export class AiChat extends Component {
         this.state.input = "";
         this.state.isTyping = false;
         this.state.currentView = 'chat';
+        this.state.openMenuChatId = null;
+    }
+
+    toggleChatMenu(chatId) {
+        this.state.openMenuChatId = this.state.openMenuChatId === chatId ? null : chatId;
+    }
+
+    async deleteConversation(chatId) {
+        this.state.openMenuChatId = null;
+        try {
+            await this.orm.call("ask.odoo.model", "delete_conversation", [chatId]);
+            // If the deleted chat was active, clear the view
+            if (this.state.currentChatId === chatId) {
+                this.state.currentChatId = null;
+                this.state.messages = [];
+            }
+            await this.loadConversations();
+        } catch (e) {
+            console.error("Failed to delete conversation", e);
+            this.notification.add("Failed to delete conversation: " + e.message, {
+                type: "danger",
+                title: "Error",
+            });
+        }
     }
 
     async loadConversations() {
@@ -125,6 +150,7 @@ export class AiChat extends Component {
         this.state.currentChatId = chatId;
         this.state.messages = []; // Clear while loading
         this.state.currentView = 'chat';
+        this.state.openMenuChatId = null;
 
         try {
             const history = await this.orm.call("ask.odoo.model", "get_messages", [chatId]);

@@ -45,6 +45,37 @@
             &.active {
                 background-color: #d1d5db;
             }
+
+            // Three-dots menu: hidden by default, visible on hover
+            .o_chat_menu {
+                opacity: 0;
+                transition: opacity 0.15s ease;
+                flex-shrink: 0;
+
+                i {
+                    font-size: 0.85rem;
+                    cursor: pointer;
+                    padding: 2px 4px;
+                    border-radius: 4px;
+
+                    &:hover {
+                        background-color: rgba(0, 0, 0, 0.1);
+                    }
+                }
+            }
+
+            &:hover .o_chat_menu,
+            .o_chat_menu:has(.o_chat_dropdown) {
+                opacity: 1;
+            }
+
+            .o_chat_dropdown {
+                animation: slideDown 0.15s ease-out;
+
+                .dropdown-item:hover {
+                    background-color: #f3f4f6;
+                }
+            }
         }
 
         .sidebar-footer .small {
@@ -162,6 +193,19 @@
 
                 &.active {
                     background-color: #343541;
+                }
+
+                .o_chat_menu i:hover {
+                    background-color: rgba(255, 255, 255, 0.15);
+                }
+
+                .o_chat_dropdown {
+                    background-color: #202123 !important;
+                    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+
+                    .dropdown-item:hover {
+                        background-color: #343541;
+                    }
                 }
             }
         }
