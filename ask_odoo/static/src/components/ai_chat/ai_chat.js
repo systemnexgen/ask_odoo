@@ -411,15 +411,50 @@ export class AiChat extends Component {
                     messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.result}`);
                 }
             } else {
-                messageContent = this.formatMessage(`❌ **Error:**\n${result.message}`);
+                // Render the structured 3-part error message (error+reason / fix code / retry prompt)
+                messageContent = this.formatMessage(result.message);
             }
 
             this.state.messages.push({
                 id: Date.now(),
                 text: messageContent,
-                type: 'ai', // reusing AI type for result display is fine
+                type: 'ai',
                 avatar: '⚙️'
             });
+
+            // If the LLM proposed a corrected code fix, add a new confirmation card
+            // so the user can approve the retry with one click.
+            // Hard cap: after 3 user-visible retries, stop and ask them to rephrase.
+            if (result.status === 'error' && result.retry_code) {
+                const currentDepth = msg.retryDepth || 0;
+                if (currentDepth < 3) {
+                    this.state.messages.push({
+                        id: Date.now() + 2,
+                        type: 'confirmation',
+                        code: result.retry_code,
+                        executed: false,
+                        cancelled: false,
+                        executing: false,
+                        isRetry: true,
+                        retryDepth: currentDepth + 1,
+                    });
+                } else {
+                    // Terminal failure — do not loop further
+                    this.state.messages.push({
+                        id: Date.now() + 2,
+                        text: this.formatMessage(
+                            "⛔ **Unable to automatically fix this query after 3 attempts.**\n\n" +
+                            "The model I tried to access may not be installed on your Odoo instance, " +
+                            "or the question may need more specific details.\n\n" +
+                            "**Please try rephrasing your question**, for example:\n" +
+                            "- Mention the exact module or record type\n" +
+                            "- Check that the relevant Odoo app is installed"
+                        ),
+                        type: 'ai',
+                        avatar: '⛔',
+                    });
+                }
+            }
 
         } catch (e) {
             console.error(e);

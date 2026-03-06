@@ -2,7 +2,7 @@
 <templates xml:space="preserve">
     <t t-name="odoo_ai_chatbot.AiChat">
         <div t-attf-class="o_ai_chat_root h-100 d-flex flex-column {{ state.darkMode ? 'o_dark_mode' : '' }}">
-            <Layout display="{controlPanel: {}}" className="'flex-grow-1 d-flex flex-column overflow-hidden'">
+            <Layout display="{controlPanel: false}" className="'flex-grow-1 d-flex flex-column overflow-hidden'">
                 
                 <div class="d-flex flex-row flex-grow-1 overflow-hidden">
                     <!-- Sidebar -->
