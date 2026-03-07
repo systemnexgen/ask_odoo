@@ -262,10 +262,19 @@
                     }
                 }
             }
+
+            .o_voice_btn:hover:not(:disabled) i {
+                color: #ececf1;
+            }
         }
 
         .text-muted {
             color: #8e8ea0 !important;
+        }
+
+        .o_chart_bubble {
+            background-color: #40414f !important;
+            border-color: #565869;
         }
     }
 
@@ -300,6 +309,70 @@
         50% {
             opacity: 1;
             transform: translateY(-3px);
+        }
+    }
+
+    // --- Voice Input Button ---
+    .o_voice_btn {
+        transition: all 0.2s ease;
+        position: relative;
+
+        i {
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        &:hover:not(:disabled) i {
+            color: #343541;
+        }
+
+        &.o_voice_active {
+            i {
+                animation: voicePulse 1.5s ease-in-out infinite;
+            }
+        }
+    }
+
+    @keyframes voicePulse {
+
+        0%,
+        100% {
+            box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4);
+        }
+
+        50% {
+            box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+        }
+    }
+
+    // --- Chart Container ---
+    .o_chart_bubble {
+        background-color: #ffffff !important;
+        border: 1px solid #e5e7eb;
+    }
+
+    .o_chart_container {
+        position: relative;
+        width: 100%;
+        max-height: 400px;
+        padding: 8px;
+        animation: chartFadeIn 0.6s ease-out;
+
+        canvas {
+            width: 100% !important;
+            max-height: 380px;
+        }
+    }
+
+    @keyframes chartFadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(8px);
+        }
+
+        to {
+            opacity: 1;
+            transform: translateY(0);
         }
     }
 

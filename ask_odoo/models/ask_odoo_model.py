@@ -206,6 +206,16 @@ class AskOdooModel(models.Model):
         code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
         if code_match:
             action_code = code_match.group(1).strip()
+            # Save confirmation code as a separate message for history reload
+            try:
+                self.env['ask.odoo.message'].create({
+                    'conversation_id': conversation.id,
+                    'type': 'confirmation',
+                    'content': 'Proposed Action',
+                    'action_code': action_code,
+                })
+            except Exception:
+                _logger.warning("AskOdoo: Could not save confirmation to history")
 
         return {
             'response': response_text,
@@ -282,8 +292,10 @@ class AskOdooModel(models.Model):
                 'date': fields.Date,
                 'timedelta': timedelta,   # pre-inject so LLM code can use it without import
             }
-            # We use safe_eval but with full ORM access for the assistant
-            safe_eval(code, local_context, mode="exec", nocopy=True)
+            # Use a savepoint so that if the generated code causes a DB error,
+            # the transaction rolls back to here instead of poisoning everything.
+            with self.env.cr.savepoint():
+                safe_eval(code, local_context, mode="exec", nocopy=True)
             
             result = local_context.get('result')
             
@@ -316,6 +328,7 @@ class AskOdooModel(models.Model):
                             pass  # Keep as-is if conversion fails
 
             # Try to convert lists to HTML tables using Pandas
+            chart_data = None
             if isinstance(result, (list, tuple)):
                 try:
                     if not result:
@@ -334,7 +347,11 @@ class AskOdooModel(models.Model):
                         # Fix for simple lists becoming column "0" - rename to "Result" if single column
                         if len(df.columns) == 1 and str(df.columns[0]) == '0':
                             df.columns = ['Result']
-                            
+
+                        # ── Chart Data Detection ──────────────────────────────
+                        # Analyze the DataFrame to determine if it's chartable
+                        chart_data = self._detect_chart_data(df)
+
                         # border=0 to let CSS handle it
                         # classes='dataframe' to ensure our CSS target hits it
                         result = df.to_html(index=False, border=0, classes='dataframe')
@@ -346,7 +363,8 @@ class AskOdooModel(models.Model):
 
             execution_result = {
                 'status': 'success',
-                'result': result
+                'result': result,
+                'chart_data': chart_data,
             }
 
             # ── Save success back to conversation history ─────────────────
@@ -357,11 +375,20 @@ class AskOdooModel(models.Model):
                         f"✅ Code executed successfully.\n"
                         f"Result preview: {preview[:300]}{'...' if len(preview) > 300 else ''}"
                     )
-                    self.env['ask.odoo.message'].create({
+                    # Determine if result is HTML
+                    is_html = isinstance(result, str) and (
+                        result.strip().startswith('<table') or result.strip().startswith('<div')
+                    )
+                    msg_vals = {
                         'conversation_id': conversation_id,
                         'type': 'ai',
                         'content': history_content,
-                    })
+                    }
+                    if is_html:
+                        msg_vals['result_html'] = result
+                    if chart_data:
+                        msg_vals['chart_data_json'] = json.dumps(chart_data)
+                    self.env['ask.odoo.message'].create(msg_vals)
                 except Exception as hist_e:
                     _logger.warning(f"AskOdoo: Could not save success result to history: {hist_e}")
 
@@ -560,11 +587,25 @@ class AskOdooModel(models.Model):
             [('conversation_id', '=', conversation_id)],
             order='create_date asc'
         )
-        return [{
-            'id': m.id,
-            'text': m.content,
-            'type': m.type
-        } for m in messages]
+        result = []
+        for m in messages:
+            msg = {
+                'id': m.id,
+                'text': m.content,
+                'type': m.type,
+            }
+            if m.result_html:
+                msg['result_html'] = m.result_html
+            if m.chart_data_json:
+                try:
+                    msg['chart_data'] = json.loads(m.chart_data_json)
+                except Exception:
+                    pass
+            if m.action_code:
+                msg['action_code'] = m.action_code
+        
+            result.append(msg)
+        return result
 
     @api.model
     def delete_conversation(self, conversation_id):
@@ -609,6 +650,119 @@ class AskOdooModel(models.Model):
                     f"Model '{model_name}' does not exist in this Odoo instance.{hint}"
                 )
         return True, None
+
+    def _detect_chart_data(self, df):
+        """
+        Analyzes a Pandas DataFrame and returns Chart.js-compatible JSON
+        if the data is suitable for visualization. Returns None otherwise.
+
+        Auto-selects chart type:
+          - Line chart: if the label column looks like dates/time
+          - Pie/Doughnut: if ≤7 categories and only 1 numeric column
+          - Bar chart: default for everything else
+        """
+        try:
+            if df is None or df.empty or len(df) < 2:
+                return None
+
+            # Classify columns into labels (text/object) and values (numeric)
+            label_cols = []
+            value_cols = []
+
+            for col in df.columns:
+                col_str = str(col)
+                # Skip columns named 'id' or ending in '_id' — not useful for charts
+                if col_str.lower() == 'id' or col_str.lower().endswith('_id'):
+                    continue
+
+                if pd.api.types.is_numeric_dtype(df[col]):
+                    value_cols.append(col)
+                elif pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]):
+                    label_cols.append(col)
+
+            # Need at least 1 label column and 1 numeric column
+            if not label_cols or not value_cols:
+                return None
+
+            # Use the first label column as the X-axis
+            label_col = label_cols[0]
+            labels = df[label_col].astype(str).tolist()
+
+            # Cap at 50 data points for readability
+            if len(labels) > 50:
+                return None
+
+            # ── Chart Type Selection ──────────────────────────────────
+            chart_type = 'bar'  # default
+
+            # Check if labels look like dates/time → line chart
+            is_time_series = False
+            date_keywords = ['date', 'month', 'year', 'week', 'day', 'time', 'period', 'quarter']
+            if any(kw in str(label_col).lower() for kw in date_keywords):
+                is_time_series = True
+                chart_type = 'line'
+
+            # Small categories with single metric → pie chart
+            if len(labels) <= 7 and len(value_cols) == 1 and not is_time_series:
+                chart_type = 'doughnut'
+
+            # ── Color Palette ─────────────────────────────────────────
+            colors = [
+                'rgba(99, 102, 241, 0.8)',    # Indigo
+                'rgba(16, 185, 129, 0.8)',    # Emerald
+                'rgba(245, 158, 11, 0.8)',    # Amber
+                'rgba(239, 68, 68, 0.8)',     # Red
+                'rgba(139, 92, 246, 0.8)',    # Violet
+                'rgba(6, 182, 212, 0.8)',     # Cyan
+                'rgba(236, 72, 153, 0.8)',    # Pink
+                'rgba(34, 197, 94, 0.8)',     # Green
+                'rgba(251, 146, 60, 0.8)',    # Orange
+                'rgba(59, 130, 246, 0.8)',    # Blue
+            ]
+            border_colors = [c.replace('0.8)', '1)') for c in colors]
+
+            # ── Build Datasets ────────────────────────────────────────
+            datasets = []
+            for i, vcol in enumerate(value_cols):
+                # Convert values, coercing errors to 0
+                values = pd.to_numeric(df[vcol], errors='coerce').fillna(0).tolist()
+
+                dataset = {
+                    'label': str(vcol),
+                    'data': values,
+                }
+
+                if chart_type == 'doughnut':
+                    # Pie/doughnut: each slice gets a different color
+                    dataset['backgroundColor'] = colors[:len(values)]
+                    dataset['borderColor'] = border_colors[:len(values)]
+                    dataset['borderWidth'] = 2
+                else:
+                    # Bar/Line: each dataset gets one color
+                    color_idx = i % len(colors)
+                    dataset['backgroundColor'] = colors[color_idx]
+                    dataset['borderColor'] = border_colors[color_idx]
+                    dataset['borderWidth'] = 2
+
+                    if chart_type == 'line':
+                        dataset['fill'] = False
+                        dataset['tension'] = 0.3
+
+                datasets.append(dataset)
+
+            chart_data = {
+                'type': chart_type,
+                'labels': labels,
+                'datasets': datasets,
+                'title': f"{', '.join(str(v) for v in value_cols)} by {label_col}",
+            }
+
+            _logger.info(f"AskOdoo: Chart detected — type={chart_type}, labels={len(labels)}, datasets={len(datasets)}")
+            return chart_data
+
+        except Exception as e:
+            _logger.warning(f"AskOdoo: Chart detection failed (non-critical): {e}")
+            return None
 
     def _get_connection_string(self):
         db_name = self.env.cr.dbname

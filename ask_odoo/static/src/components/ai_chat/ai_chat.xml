@@ -147,6 +147,20 @@
                                             </div>
                                         </t>
 
+                                        <!-- CHART MESSAGE -->
+                                        <t t-elif="message.type === 'chart'">
+                                            <div class="d-flex mb-4 justify-content-start w-100">
+                                                <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #6366f1; min-width: 30px;">
+                                                    <i class="fa fa-bar-chart text-white small"></i>
+                                                </div>
+                                                <div class="o_message_bubble o_message_ai o_chart_bubble p-3 rounded-3" style="max-width: 85%; width: 100%;">
+                                                    <div class="o_chart_container">
+                                                        <canvas t-att-id="message.chartId"></canvas>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+
                                         <!-- STANDARD MESSAGES -->
                                         <div t-else="" t-attf-class="d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
                                             
@@ -180,11 +194,21 @@
                                     <div class="input-group shadow-sm rounded-4 overflow-hidden border">
                                         <input type="text" 
                                             class="form-control border-0 p-3 shadow-none" 
-                                            placeholder="Message AskOdoo..." 
                                             t-model="state.input"
                                             t-on-keydown="_onKeyDown"
-                                            autofocus="autofocus"/>
+                                            autofocus="autofocus"
+                                            t-att-placeholder="state.isListening ? 'Listening...' : 'Message AskOdoo...'"/>
                                         
+                                        <!-- Voice Input Button -->
+                                        <button t-attf-class="btn border-0 px-2 o_voice_btn {{ state.isListening ? 'o_voice_active' : '' }}" 
+                                                type="button"
+                                                t-on-click="toggleVoiceInput"
+                                                t-att-disabled="state.isTyping"
+                                                title="Voice Input">
+                                            <i t-attf-class="fa {{ state.isListening ? 'fa-stop-circle' : 'fa-microphone' }} p-2 rounded-circle"
+                                               t-attf-style="{{ state.isListening ? 'background: #ef4444; color: white;' : 'color: #8e8ea0;' }}"></i>
+                                        </button>
+
                                         <button class="btn border-0 px-3" 
                                                 type="button"
                                                 t-on-click="sendMessage"

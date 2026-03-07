@@ -26,9 +26,12 @@ export class AiChat extends Component {
             isModeDropdownOpen: false,
             isRefreshingSchema: false,
             openMenuChatId: null,
+            isListening: false,
         });
         this.messagesEndRef = useRef("messagesEnd");
         this.fileInputRef = useRef("fileInput");
+        this._speechRecognition = null;
+        this._chartInstances = {};
 
         onWillStart(async () => {
             await this.loadConversations();
@@ -37,6 +40,8 @@ export class AiChat extends Component {
 
         useEffect(() => {
             this.scrollToBottom();
+            // Render any pending charts after DOM update
+            this._renderPendingCharts();
         }, () => [this.state.messages.length]);
     }
 
@@ -154,12 +159,65 @@ export class AiChat extends Component {
 
         try {
             const history = await this.orm.call("ask.odoo.model", "get_messages", [chatId]);
-            // Format and load history
-            this.state.messages = history.map(msg => ({
-                id: msg.id,
-                text: this.formatMessage(msg.text),
-                type: msg.type
-            }));
+            const loadedMessages = [];
+
+            for (const msg of history) {
+                if (msg.type === 'confirmation') {
+                    // Restore confirmation card (already executed since it's from history)
+                    loadedMessages.push({
+                        id: msg.id,
+                        type: 'confirmation',
+                        code: msg.action_code || '',
+                        executed: true,
+                        cancelled: false,
+                        executing: false,
+                    });
+                } else if (msg.type === 'chart') {
+                    // This shouldn't happen since we store chart_data on 'ai' messages,
+                    // but handle it just in case
+                    if (msg.chart_data) {
+                        const chartId = `chart_hist_${msg.id}`;
+                        loadedMessages.push({
+                            id: msg.id,
+                            type: 'chart',
+                            chartId: chartId,
+                            chartData: msg.chart_data,
+                        });
+                    }
+                } else {
+                    // Standard user/ai message
+                    // If it has chart_data, inject a chart message BEFORE the table
+                    if (msg.chart_data) {
+                        const chartId = `chart_hist_${msg.id}`;
+                        loadedMessages.push({
+                            id: msg.id * 1000,
+                            type: 'chart',
+                            chartId: chartId,
+                            chartData: msg.chart_data,
+                        });
+                    }
+
+                    // If it has result_html, render that instead of plain text
+                    if (msg.result_html) {
+                        loadedMessages.push({
+                            id: msg.id,
+                            text: markup(`<div class="text-start w-100">
+                                <strong>\u2705 Action Executed:</strong>
+                                <div class="table-responsive dataframe-wrapper mt-2">${msg.result_html}</div>
+                            </div>`),
+                            type: 'ai',
+                        });
+                    } else {
+                        loadedMessages.push({
+                            id: msg.id,
+                            text: this.formatMessage(msg.text),
+                            type: msg.type,
+                        });
+                    }
+                }
+            }
+
+            this.state.messages = loadedMessages;
         } catch (e) {
             console.error("Failed to load chat history", e);
         }
@@ -425,24 +483,32 @@ export class AiChat extends Component {
             let messageContent;
             if (result.status === 'success') {
                 const isHtml = typeof result.result === 'string' && (result.result.trim().startsWith('<table') || result.result.trim().startsWith('<div'));
+
+                // If chart data is available, push a chart message FIRST (above the table)
+                if (result.chart_data) {
+                    const chartId = `chart_${Date.now()}`;
+                    this.state.messages.push({
+                        id: Date.now(),
+                        type: 'chart',
+                        chartId: chartId,
+                        chartData: result.chart_data,
+                    });
+                }
+
                 if (isHtml) {
-                    // Render HTML directly. Wrapped in overflow-hidden/auto container.
-                    // Added 'text-start' to force left alignment for the whole block
                     messageContent = markup(`<div class="text-start w-100">
                         <strong>✅ Action Executed:</strong>
                         <div class="table-responsive dataframe-wrapper mt-2">${result.result}</div>
                     </div>`);
                 } else {
-                    // Render Markdown
                     messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.result}`);
                 }
             } else {
-                // Render the structured 3-part error message (error+reason / fix code / retry prompt)
                 messageContent = this.formatMessage(result.message);
             }
 
             this.state.messages.push({
-                id: Date.now(),
+                id: Date.now() + 1,
                 text: messageContent,
                 type: 'ai',
                 avatar: '⚙️'
@@ -496,6 +562,145 @@ export class AiChat extends Component {
 
     cancelAction(msg) {
         msg.cancelled = true;
+    }
+
+    _renderPendingCharts() {
+        // Find all chart messages that haven't been rendered yet
+        for (const msg of this.state.messages) {
+            if (msg.type !== 'chart' || msg._rendered) continue;
+
+            const canvas = document.getElementById(msg.chartId);
+            if (!canvas) continue;
+
+            // Destroy previous instance if it exists
+            if (this._chartInstances[msg.chartId]) {
+                this._chartInstances[msg.chartId].destroy();
+            }
+
+            const chartData = msg.chartData;
+            const isDoughnut = chartData.type === 'doughnut';
+
+            try {
+                this._chartInstances[msg.chartId] = new Chart(canvas, {
+                    type: chartData.type,
+                    data: {
+                        labels: chartData.labels,
+                        datasets: chartData.datasets,
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            title: {
+                                display: true,
+                                text: chartData.title || '',
+                                font: { size: 14, weight: 'bold' },
+                                padding: { bottom: 16 },
+                            },
+                            legend: {
+                                display: chartData.datasets.length > 1 || isDoughnut,
+                                position: isDoughnut ? 'right' : 'top',
+                                labels: { usePointStyle: true, padding: 16 },
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(0,0,0,0.8)',
+                                cornerRadius: 8,
+                                padding: 12,
+                            },
+                        },
+                        scales: isDoughnut ? {} : {
+                            x: {
+                                grid: { display: false },
+                                ticks: { maxRotation: 45, autoSkip: true },
+                            },
+                            y: {
+                                beginAtZero: true,
+                                grid: { color: 'rgba(0,0,0,0.06)' },
+                            },
+                        },
+                        animation: {
+                            duration: 800,
+                            easing: 'easeOutQuart',
+                        },
+                    },
+                });
+                msg._rendered = true;
+            } catch (e) {
+                console.error('Chart rendering failed:', e);
+            }
+        }
+    }
+
+    toggleVoiceInput() {
+        if (this.state.isListening) {
+            this.stopVoiceInput();
+            return;
+        }
+
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            this.notification.add(
+                "Voice input is not supported by your browser. Please use Chrome or Edge.",
+                { type: "warning", title: "Unsupported Browser" }
+            );
+            return;
+        }
+
+        const recognition = new SpeechRecognition();
+        recognition.lang = "en-US";
+        recognition.interimResults = true;
+        recognition.continuous = true;
+        recognition.maxAlternatives = 1;
+
+        // Track text that existed before we started recording
+        const existingText = this.state.input;
+
+        recognition.onresult = (event) => {
+            let interimTranscript = "";
+            let finalTranscript = "";
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript;
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+
+            // Build the full input: existing text + final (committed) + interim (live preview)
+            const separator = existingText ? " " : "";
+            this.state.input = existingText + separator + finalTranscript + interimTranscript;
+        };
+
+        recognition.onerror = (event) => {
+            console.error("Speech recognition error:", event.error);
+            if (event.error !== "aborted") {
+                this.notification.add(
+                    "Voice input error: " + event.error,
+                    { type: "danger", title: "Microphone Error" }
+                );
+            }
+            this.state.isListening = false;
+            this._speechRecognition = null;
+        };
+
+        recognition.onend = () => {
+            this.state.isListening = false;
+            this._speechRecognition = null;
+        };
+
+        recognition.start();
+        this._speechRecognition = recognition;
+        this.state.isListening = true;
+    }
+
+    stopVoiceInput() {
+        if (this._speechRecognition) {
+            this._speechRecognition.stop();
+            this._speechRecognition = null;
+        }
+        this.state.isListening = false;
     }
 }
 

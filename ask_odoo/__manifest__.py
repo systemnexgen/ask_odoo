@@ -12,6 +12,7 @@
     ],
     'assets': {
         'web.assets_backend': [
+            'ask_odoo/static/src/lib/chart.umd.min.js',
             'ask_odoo/static/src/components/ai_chat/ai_chat.scss',
             'ask_odoo/static/src/components/ai_chat/ai_chat.xml',
             'ask_odoo/static/src/components/ai_chat/ai_chat.js',

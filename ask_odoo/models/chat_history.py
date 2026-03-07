@@ -19,5 +19,8 @@ class AskOdooMessage(models.Model):
     _order = 'create_date asc'
 
     conversation_id = fields.Many2one('ask.odoo.conversation', string='Conversation', required=True, ondelete='cascade')
-    type = fields.Selection([('user', 'User'), ('ai', 'AI')], string='Type', required=True)
+    type = fields.Selection([('user', 'User'), ('ai', 'AI'), ('confirmation', 'Confirmation'), ('chart', 'Chart')], string='Type', required=True)
     content = fields.Text(string='Content', required=True)
+    result_html = fields.Text(string='Result HTML')
+    chart_data_json = fields.Text(string='Chart Data JSON')
+    action_code = fields.Text(string='Action Code')
