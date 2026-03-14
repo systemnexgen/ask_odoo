@@ -849,65 +849,25 @@ class AskOdooModel(models.Model):
 
     def _schema_to_text(self, model_metadata):
         """
-        Converts model schema to text, HIGHLY OPTIMIZED to reduce token usage.
-        Excludes technical mixin fields and UI-only methods.
+        Converts model schema to text with ALL fields included.
+        No filters applied — every field is preserved.
         """
         # 1. Basic Info
         model_name = model_metadata.get('name', model_metadata.get('model'))
         model_tech_name = model_metadata.get('model')
-        
-        # 2. DEFINITION OF NOISE
-        # These fields consume tokens but provide zero value for business logic queries
-        IGNORED_FIELDS = {
-            # Standard Audit
-            'id', 'create_uid', 'create_date', 'write_uid', 'write_date', '__last_update',
-            # Mail Thread / Activities (Massive Token Bloat)
-            'message_ids', 'message_follower_ids', 'message_partner_ids', 'message_channel_ids',
-            'message_is_follower', 'message_needaction', 'message_needaction_counter',
-            'message_has_error', 'message_has_error_counter', 'message_attachment_count',
-            'message_main_attachment_id', 'website_message_ids', 'has_message',
-            'activity_ids', 'activity_state', 'activity_user_id', 'activity_type_id',
-            'activity_date_deadline', 'activity_summary', 'activity_exception_decoration',
-            'activity_exception_icon', 'my_activity_date_deadline', 'activity_type_icon',
-            # View/UI specific
-            'display_name', 'display_name_check',
-        }
 
-        # 3. Filter Fields
-        relevant_fields = []
+        # 2. Include ALL Fields (no filtering)
+        all_fields = []
         for f in model_metadata.get('fields', []):
-            if f['name'] in IGNORED_FIELDS:
-                continue
-            
             # Formatting: "Name (tech_name): type"
             # If relation exists, add "-> RelatedModel"
             desc = f"- {f['string']} ({f['name']}): {f['type']}"
             if f.get('relation'):
                 desc += f" -> {f['relation']}"
-            relevant_fields.append(desc)
+            all_fields.append(desc)
 
-        # Limit to top 40 most relevant fields to prevent context overflow on huge models (like res.partner)
-        # (You can implement a sorter here to prioritize required fields if needed)
-        relevant_fields = relevant_fields[:10]
-
-        # 4. Filter Methods
-        relevant_methods = []
-        for m in model_metadata.get('methods', []):
-            name = m['name']
-            
-            # Skip UI actions (opening views/wizards) and standard mixin methods
-            if any(prefix in name for prefix in ['action_view_', 'action_open_', 'action_see_', '_compute_', '_get_']):
-                continue
-                
-            # Keep only "Business Logic" actions (confirm, cancel, draft, send, etc.)
-            relevant_methods.append(f"- {name}")
-
-        # 5. Construct Compact Text
-        # We strip unnecessary newlines and labels to save tokens
-        text = f"Model: {model_name} ({model_tech_name})\nFields:\n" + "\n".join(relevant_fields)
-        
-        if relevant_methods:
-            text += "\nMethods:\n" + "\n".join(relevant_methods)
+        # 3. Construct Text
+        text = f"Model: {model_name} ({model_tech_name})\nFields:\n" + "\n".join(all_fields)
 
         return text
 
@@ -1010,8 +970,12 @@ class AskOdooModel(models.Model):
         """
         vector_store = self._get_schema_vector_store()
         return vector_store.as_retriever(
-            search_type="similarity",
-            search_kwargs={"k": 5} # Retrieve top 10 to ensure we get related models
+            search_type="mmr",
+            search_kwargs={
+                "k": 5, 
+                "fetch_k": 20,
+                "lambda_mult": 0.7 # 0 = max diversity, 1 = pure similarity
+            } 
         )
 
     @api.model
@@ -1063,19 +1027,18 @@ class AskOdooModel(models.Model):
             _logger.warning(f"AskOdoo: Failed to save schema snapshot attachment: {e}")
 
         # 4. Chunk and Embed FROM THE CORPUS
-        # We use a text splitter on the full corpus
-        # Increased chunk size to 4000 to try and keep entire model definitions (like res.partner) intact
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=4000, 
-            chunk_overlap=200,
-            # Prioritize keeping models together usually, but follow size limits
-            separators=["\n\nOdoo Model:", "\n\n", "\n", " "] 
-        )
+        # Split strictly by the 50-equals separator so that each chunk corresponds to exactly ONE model.
+        # This prevents models from being broken up by text length.
+        separator = "\n\n" + "="*50 + "\n\n"
         
-        texts = text_splitter.split_text(full_corpus)
+        # Remove the EOF marker before splitting to keep the list clean
+        eof_marker = "\n\n" + "="*50 + "\n=== END OF SCHEMA SNAPSHOT ===\n"
+        clean_corpus = full_corpus.replace(eof_marker, "")
         
-        # Create Documents (metadata is lost in this massive chunking approach, 
-        # but content contains the model info)
+        # Split into exact model chunks
+        texts = [t.strip() for t in clean_corpus.split(separator) if t.strip()]
+        
+        # Create Documents (each document is now guaranteed to be one full model definition)
         documents = [Document(page_content=t, metadata={'source': 'schema_snapshot'}) for t in texts]
             
         # 5. Add to Vector Store
