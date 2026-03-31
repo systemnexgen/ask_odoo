@@ -25,6 +25,7 @@ class AskOdooModel(models.Model):
         # print(f"Groq API Key: {GROQ_API_KEY}")
         return ChatGroq(
             model="llama-3.1-8b-instant",
+            # model="openai/gpt-oss-120b",
             groq_api_key=GROQ_API_KEY,
             temperature=0
         )

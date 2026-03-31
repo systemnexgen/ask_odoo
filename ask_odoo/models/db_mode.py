@@ -57,7 +57,7 @@ class AskOdooModel(models.Model):
 
             # 5. Database-Specific Prompt
             system_template = (
-                "Odoo DB Assistant. READ operations only. Use ONLY the schema below.\n\n"
+                "Odoo DB Assistant. READ operations ONLY. Create, Update, and Delete operations are STRICTLY PROHIBITED. Use ONLY the schema below.\n\n"
                 "RULES:\n"
                 "- Generate Odoo ORM code using `self.env`. Wrap in ```python ... ``` block.\n"
                 "- Assign final output to `result`. No `print()`.\n"
@@ -147,14 +147,22 @@ class AskOdooModel(models.Model):
             _logger.exception("Database Mode Failed")
             response_text = f"Error: {str(e)}"
 
-        # 7. Save AI Message
+        # 7. Extract Code if present
+        execution_result = None
+        has_code = False
+        code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
+        if code_match:
+            has_code = True
+            action_code = code_match.group(1).strip()
+
+        # 8. Save AI Message (Hidden if code is executed so UI doesn't show explanation)
         self.env['ask.odoo.message'].create({
             'conversation_id': conversation.id,
             'type': 'ai',
-            'content': response_text,
+            'content': ("[HIDDEN]" if has_code else "") + response_text,
         })
 
-        # 8. Update Conversation
+        # 9. Update Conversation
         conversation.write({'last_activity': fields.Datetime.now()})
 
         if len(conversation.message_ids) <= 2:
@@ -162,31 +170,19 @@ class AskOdooModel(models.Model):
                 'name': message[:30] + "..." if len(message) > 30 else message
             })
 
-        # 9. Extract Code if present
-        action_code = None
-        code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
-        if code_match:
-            action_code = code_match.group(1).strip()
-            # Save confirmation code as a separate message for history reload
-            try:
-                self.env['ask.odoo.message'].create({
-                    'conversation_id': conversation.id,
-                    'type': 'confirmation',
-                    'content': 'Proposed Action',
-                    'action_code': action_code,
-                })
-            except Exception:
-                _logger.warning("AskOdoo: Could not save confirmation to history")
+        if has_code:
+            execution_result = self.execute_confirmed_code(action_code, conversation.id)
 
         return {
             'response': response_text,
             'conversation_id': conversation.id,
             'title': conversation.name,
-            'action_code': action_code,
+            'execution_result': execution_result,
+            'has_code': has_code,
         }
 
     @api.model
-    def execute_confirmed_code(self, code, conversation_id):
+    def execute_confirmed_code(self, code, conversation_id, retry_depth=0):
         """
         Executes the confirmed Python code safely and saves the result
         back to the conversation history so the LLM can learn from
@@ -308,38 +304,27 @@ class AskOdooModel(models.Model):
         except Exception as e:
             _logger.exception("Execution Error")
 
-            # ── Guard 1: Retry counter bail-out ───────────────────────────
-            # Count consecutive ❌ errors in conversation. After 3, stop retrying.
-            MAX_CONSECUTIVE_ERRORS = 3
-            if conversation_id:
-                error_msgs = self.env['ask.odoo.message'].search([
-                    ('conversation_id', '=', conversation_id),
-                    ('type', '=', 'ai'),
-                    ('content', 'like', '❌ Execution Error'),
-                ], order='id desc', limit=MAX_CONSECUTIVE_ERRORS)
-
-                if len(error_msgs) >= MAX_CONSECUTIVE_ERRORS:
-                    _logger.warning("AskOdoo: Max consecutive errors reached. Bailing out.")
-                    bail_message = (
-                        "**❌ Multiple attempts have failed.**\n\n"
-                        "I was unable to fix this automatically. "
-                        "Please try rephrasing your question or providing more details."
-                    )
-                    # Save bail-out to history
-                    try:
-                        self.env['ask.odoo.message'].create({
-                            'conversation_id': conversation_id,
-                            'type': 'ai',
-                            'content': bail_message,
-                        })
-                    except Exception:
-                        pass
-                    return {
-                        'status': 'error',
-                        'message': bail_message,
-                        'debug_message': str(e),
-                        'retry_code': None,  # No retry offered
-                    }
+            # ── Guard 1: Retry Depth ───────────────────────────
+            MAX_AUTO_RETRIES = 3
+            if retry_depth >= MAX_AUTO_RETRIES:
+                _logger.warning("AskOdoo: Max auto-retries reached. Bailing out.")
+                bail_message = (
+                    "**❌ Unable to automatically retrieve data.**\n\n"
+                    "I tried fixing the query multiple times but could not find the correct fields. "
+                    "Please try rephrasing your question or providing more details."
+                )
+                if conversation_id:
+                    self.env['ask.odoo.message'].create({
+                        'conversation_id': conversation_id,
+                        'type': 'ai',
+                        'content': "[HIDDEN]" + bail_message,
+                    })
+                return {
+                    'status': 'error',
+                    'message': bail_message,
+                    'debug_message': str(e),
+                    'retry_code': None,
+                }
 
             # Generate structured error response (now with history awareness)
             friendly_error = self._explain_error_to_user(code, str(e), conversation_id)
@@ -361,19 +346,37 @@ class AskOdooModel(models.Model):
                     "Please try rephrasing your question or providing more details."
                 )
 
-            # ── Save error + proposed fix to conversation history ─────────
+            # Auto-execute retry code if valid
+            if retry_code:
+                if conversation_id:
+                    try:
+                        history_content = (
+                            f"❌ Execution Error:\n```python\n{code}\n```\nError: {str(e)}\n"
+                            f"Proposed fix code:\n```python\n{retry_code}\n```"
+                        )
+                        self.env['ask.odoo.message'].create({
+                            'conversation_id': conversation_id,
+                            'type': 'ai',
+                            'content': "[HIDDEN]" + history_content,
+                        })
+                    except Exception as hist_e:
+                        _logger.warning(f"AskOdoo: Could not save error to history: {hist_e}")
+                
+                _logger.info(f"AskOdoo: Auto-retrying fixed code. Depth: {retry_depth + 1}")
+                return self.execute_confirmed_code(retry_code, conversation_id, retry_depth=retry_depth + 1)
+
+            # If no retry code was found, save final error and return
             if conversation_id:
                 try:
                     history_content = (
                         f"❌ Execution Error for the previously proposed code:\n"
                         f"Code attempted:\n```python\n{code}\n```\n"
                         f"Error: {str(e)}\n"
-                        + (f"Proposed fix code:\n```python\n{retry_code}\n```" if retry_code else "")
                     )
                     self.env['ask.odoo.message'].create({
                         'conversation_id': conversation_id,
                         'type': 'ai',
-                        'content': history_content,
+                        'content': "[HIDDEN]" + history_content,
                     })
                 except Exception as hist_e:
                     _logger.warning(f"AskOdoo: Could not save error to history: {hist_e}")
@@ -382,7 +385,7 @@ class AskOdooModel(models.Model):
                 'status': 'error',
                 'message': friendly_error,
                 'debug_message': str(e),
-                'retry_code': retry_code,  # None = no retry button shown
+                'retry_code': None,
             }
 
     @api.model
@@ -401,7 +404,6 @@ class AskOdooModel(models.Model):
                 "**Reason:** [why]\n\n"
                 "**💡 Proposed Fix:** [ORM change description]\n"
                 "```python\nresult = ...\n```\n\n"
-                "**Would you like me to try again with this fix?**\n\n"
                 "Only fix ORM code. No imports. Assign to `result`.\n"
             )
 
@@ -433,7 +435,7 @@ class AskOdooModel(models.Model):
             return response.content
         except Exception as e:
             _logger.error(f"Failed to explain error with LLM: {e}")
-            return f"**❌ Error:** {error_message}\n\n**Would you like me to try again?**"
+            return f"**❌ Error:** {error_message}\n\n**Please rephrase your query or provide more details.**"
 
     def _validate_code_models(self, code):
         """

@@ -29,7 +29,10 @@ class AskOdooModel(models.Model):
             if msg.type == 'user':
                 history.append(HumanMessage(content=msg.content or ""))
             else:
-                history.append(AIMessage(content=msg.content or ""))
+                content = msg.content or ""
+                if content.startswith("[HIDDEN]"):
+                    content = content[8:]
+                history.append(AIMessage(content=content))
                 
         _logger.info(f"Retrieved {len(history)} messages for history. IDs: {history_records.ids}")
         return history
@@ -53,6 +56,10 @@ class AskOdooModel(models.Model):
         )
         result = []
         for m in messages:
+            # Skip hidden messages for frontend rendering
+            if m.content and m.content.startswith("[HIDDEN]"):
+                continue
+                
             msg = {
                 'id': m.id,
                 'text': m.content,

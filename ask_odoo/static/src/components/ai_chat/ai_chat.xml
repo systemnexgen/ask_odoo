@@ -115,40 +115,8 @@
                                 <div t-else="" class="o_ai_chat_container w-100 p-4 pb-5">
                                     <t t-foreach="state.messages" t-as="message" t-key="message.id">
                                         
-                                        <!-- CONFIRMATION MESSAGE -->
-                                        <t t-if="message.type === 'confirmation'">
-                                            <div class="d-flex mb-4 justify-content-start w-100 ps-lg-5">
-                                                <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #ff9800; min-width: 30px;">
-                                                    <i class="fa fa-terminal text-white small"></i>
-                                                </div>
-                                                <div class="o_message_bubble p-0 rounded-3 border bg-white shadow-sm overflow-hidden" style="max-width: 85%; width: 100%;">
-                                                    <div class="p-2 border-bottom bg-light d-flex justify-content-between align-items-center">
-                                                        <span class="small fw-bold text-uppercase text-muted"><i class="fa fa-code me-1"></i> Proposed Action</span>
-                                                    </div>
-                                                    <div class="p-3 bg-light bg-opacity-10 code-block" style="background: #f8f9fa;">
-                                                        <pre class="m-0 small text-dark p-2" style="white-space: pre-wrap; font-family: monospace;"><t t-esc="message.code"/></pre>
-                                                    </div>
-                                                    <div class="p-2 border-top bg-white d-flex justify-content-end gap-2">
-                                                        <t t-if="!message.executed and !message.cancelled">
-                                                            <button class="btn btn-sm btn-outline-secondary" t-on-click="() => this.cancelAction(message)" t-att-disabled="message.executing">Cancel</button>
-                                                            <button class="btn btn-sm btn-primary d-flex align-items-center" t-on-click="() => this.executeAction(message)" t-att-disabled="message.executing">
-                                                                <i t-if="message.executing" class="fa fa-circle-o-notch fa-spin me-2"></i>
-                                                                <span>Execute</span>
-                                                            </button>
-                                                        </t>
-                                                        <t t-elif="message.executed">
-                                                            <span class="badge bg-success text-white py-2 px-3">Executed</span>
-                                                        </t>
-                                                        <t t-elif="message.cancelled">
-                                                            <span class="badge bg-secondary text-white py-2 px-3">Cancelled</span>
-                                                        </t>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </t>
-
                                         <!-- CHART MESSAGE -->
-                                        <t t-elif="message.type === 'chart'">
+                                        <t t-if="message.type === 'chart'">
                                             <div class="d-flex mb-4 justify-content-start w-100">
                                                 <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #6366f1; min-width: 30px;">
                                                     <i class="fa fa-bar-chart text-white small"></i>
@@ -172,6 +140,16 @@
                                                 <div class="o_message_text" style="white-space: pre-wrap;">
                                                     <t t-out="message.text"/>
                                                 </div>
+                                                <t t-if="message.tableHtml">
+                                                    <div t-attf-class="table-responsive dataframe-wrapper mt-2 bg-white rounded border" 
+                                                         t-att-style="message.isTableExpanded ? '' : 'max-height: 250px; overflow: hidden; position: relative;'">
+                                                        <t t-out="message.tableHtml" />
+                                                        <div t-if="!message.isTableExpanded" style="position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(to bottom, transparent, white);"></div>
+                                                    </div>
+                                                    <button class="btn btn-sm btn-light border mt-2 w-100 text-primary fw-bold" t-on-click="() => this.toggleTable(message)">
+                                                        <t t-esc="message.isTableExpanded ? 'Collapse Table' : 'Expand Table'"/>
+                                                    </button>
+                                                </t>
                                             </div>
                                         </div>
                                     </t>

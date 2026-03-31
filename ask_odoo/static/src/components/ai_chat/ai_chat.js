@@ -51,6 +51,10 @@ export class AiChat extends Component {
         }
     }
 
+    toggleTable(message) {
+        message.isTableExpanded = !message.isTableExpanded;
+    }
+
     toggleTheme() {
         this.state.darkMode = !this.state.darkMode;
     }
@@ -162,17 +166,7 @@ export class AiChat extends Component {
             const loadedMessages = [];
 
             for (const msg of history) {
-                if (msg.type === 'confirmation') {
-                    // Restore confirmation card (already executed since it's from history)
-                    loadedMessages.push({
-                        id: msg.id,
-                        type: 'confirmation',
-                        code: msg.action_code || '',
-                        executed: true,
-                        cancelled: false,
-                        executing: false,
-                    });
-                } else if (msg.type === 'chart') {
+                if (msg.type === 'chart') {
                     // This shouldn't happen since we store chart_data on 'ai' messages,
                     // but handle it just in case
                     if (msg.chart_data) {
@@ -201,10 +195,9 @@ export class AiChat extends Component {
                     if (msg.result_html) {
                         loadedMessages.push({
                             id: msg.id,
-                            text: markup(`<div class="text-start w-100">
-                                <strong>\u2705 Action Executed:</strong>
-                                <div class="table-responsive dataframe-wrapper mt-2">${msg.result_html}</div>
-                            </div>`),
+                            text: markup('<strong>✅ Action Executed:</strong>'),
+                            tableHtml: markup(msg.result_html),
+                            isTableExpanded: false,
                             type: 'ai',
                         });
                     } else {
@@ -429,24 +422,59 @@ export class AiChat extends Component {
             // Update Chat ID (essential if it was null/new)
             this.state.currentChatId = result.conversation_id;
 
-            // Add AI Response (Formatted)
-            this.state.messages.push({
-                id: Date.now() + 1,
-                text: this.formatMessage(result.response), // Use markup
-                type: 'ai',
-                avatar: '🤖'
-            });
-
-            // Handle Action Confirmation (if code is returned)
-            if (result.action_code) {
+            // Add AI Response (Formatted), skip if it has code to hide explanation
+            if (!result.has_code) {
                 this.state.messages.push({
-                    id: Date.now() + 2,
-                    type: 'confirmation',
-                    code: result.action_code,
-                    executed: false,
-                    cancelled: false,
-                    executing: false
+                    id: Date.now() + 1,
+                    text: this.formatMessage(result.response), // Use markup
+                    type: 'ai',
+                    avatar: '🤖'
                 });
+            }
+
+            // Handle Auto-Executed Code (if execution_result is returned)
+            if (result.execution_result) {
+                let messageContent;
+                if (result.execution_result.status === 'success') {
+                    const isHtml = typeof result.execution_result.result === 'string' && (result.execution_result.result.trim().startsWith('<table') || result.execution_result.result.trim().startsWith('<div'));
+
+                    if (result.execution_result.chart_data) {
+                        const chartId = `chart_${Date.now()}`;
+                        this.state.messages.push({
+                            id: Date.now() + 2,
+                            type: 'chart',
+                            chartId: chartId,
+                            chartData: result.execution_result.chart_data,
+                        });
+                    }
+
+                    if (isHtml) {
+                        this.state.messages.push({
+                            id: Date.now() + 3,
+                            text: markup('<strong>✅ Action Executed:</strong>'),
+                            tableHtml: markup(result.execution_result.result),
+                            isTableExpanded: false,
+                            type: 'ai',
+                            avatar: '⚙️'
+                        });
+                    } else {
+                        messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.execution_result.result}`);
+                        this.state.messages.push({
+                            id: Date.now() + 3,
+                            text: messageContent,
+                            type: 'ai',
+                            avatar: '⚙️'
+                        });
+                    }
+                } else {
+                    messageContent = this.formatMessage(result.execution_result.message);
+                    this.state.messages.push({
+                        id: Date.now() + 3,
+                        text: messageContent,
+                        type: 'ai',
+                        avatar: '⚙️'
+                    });
+                }
             }
 
             // Refresh sidebar if it was a new chat to show the new title
@@ -466,102 +494,6 @@ export class AiChat extends Component {
             this.state.isTyping = false;
             this.scrollToBottom();
         }
-    }
-
-    async executeAction(msg) {
-        if (msg.executed || msg.cancelled) return;
-
-        msg.executing = true; // fast state update
-
-        try {
-            const result = await this.orm.call("ask.odoo.model", "execute_confirmed_code", [msg.code, this.state.currentChatId]);
-
-            msg.executed = true; // Mark as done blocks buttons
-
-            // Show Result
-            // Show Result
-            let messageContent;
-            if (result.status === 'success') {
-                const isHtml = typeof result.result === 'string' && (result.result.trim().startsWith('<table') || result.result.trim().startsWith('<div'));
-
-                // If chart data is available, push a chart message FIRST (above the table)
-                if (result.chart_data) {
-                    const chartId = `chart_${Date.now()}`;
-                    this.state.messages.push({
-                        id: Date.now(),
-                        type: 'chart',
-                        chartId: chartId,
-                        chartData: result.chart_data,
-                    });
-                }
-
-                if (isHtml) {
-                    messageContent = markup(`<div class="text-start w-100">
-                        <strong>✅ Action Executed:</strong>
-                        <div class="table-responsive dataframe-wrapper mt-2">${result.result}</div>
-                    </div>`);
-                } else {
-                    messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.result}`);
-                }
-            } else {
-                messageContent = this.formatMessage(result.message);
-            }
-
-            this.state.messages.push({
-                id: Date.now() + 1,
-                text: messageContent,
-                type: 'ai',
-                avatar: '⚙️'
-            });
-
-            // If the LLM proposed a corrected code fix, add a new confirmation card
-            // so the user can approve the retry with one click.
-            // Hard cap: after 3 user-visible retries, stop and ask them to rephrase.
-            if (result.status === 'error' && result.retry_code) {
-                const currentDepth = msg.retryDepth || 0;
-                if (currentDepth < 3) {
-                    this.state.messages.push({
-                        id: Date.now() + 2,
-                        type: 'confirmation',
-                        code: result.retry_code,
-                        executed: false,
-                        cancelled: false,
-                        executing: false,
-                        isRetry: true,
-                        retryDepth: currentDepth + 1,
-                    });
-                } else {
-                    // Terminal failure — do not loop further
-                    this.state.messages.push({
-                        id: Date.now() + 2,
-                        text: this.formatMessage(
-                            "⛔ **Unable to automatically fix this query after 3 attempts.**\n\n" +
-                            "The model I tried to access may not be installed on your Odoo instance, " +
-                            "or the question may need more specific details.\n\n" +
-                            "**Please try rephrasing your question**, for example:\n" +
-                            "- Mention the exact module or record type\n" +
-                            "- Check that the relevant Odoo app is installed"
-                        ),
-                        type: 'ai',
-                        avatar: '⛔',
-                    });
-                }
-            }
-
-        } catch (e) {
-            console.error(e);
-            this.notification.add("Execution Failed: " + e.message, {
-                type: "danger",
-                title: "Execution Error",
-            });
-        } finally {
-            msg.executing = false;
-            this.scrollToBottom();
-        }
-    }
-
-    cancelAction(msg) {
-        msg.cancelled = true;
     }
 
     _renderPendingCharts() {
