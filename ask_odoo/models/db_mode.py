@@ -6,6 +6,7 @@ import json
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
+from .prompts import get_db_mode_prompt
 
 _logger = logging.getLogger(__name__)
 
@@ -35,48 +36,24 @@ class AskOdooModel(models.Model):
             'type': 'user',
             'content': message,
         })
-
+        context_text = "No context available."
         try:
             # 3. Components
             llm = self._get_llm()
-            retriever = self._get_schema_retriever()
-
             history = self._get_history(conversation.id, exclude_id=user_msg.id)
 
-            # 4. Retrieve Schema Context
-            docs = retriever.invoke(message)
-
-            context_text = (
-                "\n\n".join(doc.page_content for doc in docs)
-                if docs else "No relevant schema found."
-            )
+            # 4. Retrieve & Trim Schema Context (Two-Phase)
+            # Phase 1: vector similarity → top-5 models
+            # Phase 2: field trimming per model (keyword + relational + generic rules)
+            context_text = self._get_relevant_schema(message)
 
             _logger.info(
                 f"\n=== [AskOdoo][DB MODE] Schema Context ===\n{context_text}\n========================================="
             )
 
             # 5. Database-Specific Prompt
-            system_template = (
-                "Odoo DB Assistant. READ operations ONLY. Create, Update, and Delete operations are STRICTLY PROHIBITED. Use ONLY the schema below.\n\n"
-                "RULES:\n"
-                "- Generate Odoo ORM code using `self.env`. Wrap in ```python ... ``` block.\n"
-                "- Assign final output to `result`. No `print()`.\n"
-                "- For tables: return list of dicts or list of lists (first row = headers).\n"
-                "- Use `limit=1` when searching for a single record ID.\n"
-                "- Use HTML tags (not Markdown) for explanation text.\n"
-                "- If not in schema, say you don't know.\n\n"
-                "PRE-INJECTED (no imports allowed):\n"
-                "`self`, `env`, `datetime` (.now()), `date` (.today()), `timedelta`, `time`\n\n"
-                "- If history shows a previous ❌ error, do NOT repeat the same mistake.\n\n"
-                "SCHEMA:\n{context}"
-            )
-
-
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", system_template),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{question}"),
-            ])
+            embeddings = self._get_embeddings()
+            prompt = get_db_mode_prompt(message, embeddings, top_k=2)
 
             prompt_messages = prompt.format_messages(
                 context=context_text,
@@ -171,7 +148,7 @@ class AskOdooModel(models.Model):
             })
 
         if has_code:
-            execution_result = self.execute_confirmed_code(action_code, conversation.id)
+            execution_result = self.execute_confirmed_code(action_code, conversation.id, schema_context=context_text)
 
         return {
             'response': response_text,
@@ -182,7 +159,7 @@ class AskOdooModel(models.Model):
         }
 
     @api.model
-    def execute_confirmed_code(self, code, conversation_id, retry_depth=0):
+    def execute_confirmed_code(self, code, conversation_id, retry_depth=0, schema_context=None):
         """
         Executes the confirmed Python code safely and saves the result
         back to the conversation history so the LLM can learn from
@@ -326,8 +303,8 @@ class AskOdooModel(models.Model):
                     'retry_code': None,
                 }
 
-            # Generate structured error response (now with history awareness)
-            friendly_error = self._explain_error_to_user(code, str(e), conversation_id)
+            # Generate structured error response (now with history awareness and schema context)
+            friendly_error = self._explain_error_to_user(code, str(e), conversation_id, schema_context)
 
             # Extract the corrected code block from the LLM's structured response
             retry_code = None
@@ -363,7 +340,7 @@ class AskOdooModel(models.Model):
                         _logger.warning(f"AskOdoo: Could not save error to history: {hist_e}")
                 
                 _logger.info(f"AskOdoo: Auto-retrying fixed code. Depth: {retry_depth + 1}")
-                return self.execute_confirmed_code(retry_code, conversation_id, retry_depth=retry_depth + 1)
+                return self.execute_confirmed_code(retry_code, conversation_id, retry_depth=retry_depth + 1, schema_context=schema_context)
 
             # If no retry code was found, save final error and return
             if conversation_id:
@@ -389,11 +366,11 @@ class AskOdooModel(models.Model):
             }
 
     @api.model
-    def _explain_error_to_user(self, code, error_message, conversation_id=None):
+    def _explain_error_to_user(self, code, error_message, conversation_id=None, schema_context=None):
         """
         Uses the LLM to produce a structured 3-part error response.
-        Now includes conversation history so the LLM can see previous
-        failed attempts and avoid repeating the same mistake.
+        Now includes conversation history and schema context so the LLM can see previous
+        failed attempts and avoid hallucinating fields on retries.
         """
         try:
             llm = self._get_llm()
@@ -405,6 +382,9 @@ class AskOdooModel(models.Model):
                 "**💡 Proposed Fix:** [ORM change description]\n"
                 "```python\nresult = ...\n```\n\n"
                 "Only fix ORM code. No imports. Assign to `result`.\n"
+                "You MUST use ONLY the exact models and fields explicitly defined in the schema below. "
+                "Do not guess or assume fields exist if they are not listed.\n\n"
+                "SCHEMA:\n{context}\n"
             )
 
             human_template = (
@@ -429,6 +409,7 @@ class AskOdooModel(models.Model):
                 code=code,
                 error=error_message,
                 history=history,
+                context=schema_context or "No schema context provided."
             )
 
             response = llm.invoke(messages)

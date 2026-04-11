@@ -195,7 +195,6 @@ export class AiChat extends Component {
                     if (msg.result_html) {
                         loadedMessages.push({
                             id: msg.id,
-                            text: markup('<strong>✅ Action Executed:</strong>'),
                             tableHtml: markup(msg.result_html),
                             isTableExpanded: false,
                             type: 'ai',
@@ -451,7 +450,6 @@ export class AiChat extends Component {
                     if (isHtml) {
                         this.state.messages.push({
                             id: Date.now() + 3,
-                            text: markup('<strong>✅ Action Executed:</strong>'),
                             tableHtml: markup(result.execution_result.result),
                             isTableExpanded: false,
                             type: 'ai',

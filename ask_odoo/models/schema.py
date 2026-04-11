@@ -1,13 +1,166 @@
 from odoo import models, fields, api
 import logging
 import base64
+import re
+import math
 from langchain_core.documents import Document
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import CharacterTextSplitter
 
 _logger = logging.getLogger(__name__)
 
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
+
+    @api.model
+    def _vector_shortlist_fields(self, question, model_metadata, embeddings_model, top_n=15):
+        """
+        Pure Vector Field Shortlisting:
+        Embeds the question and every field (description + name + type) to
+        dynamically pick the top N most semantically relevant fields in-memory.
+        Mathmatically limits vertical scope to avoid exceeding token window limits.
+        """
+        model_fields = model_metadata.get('fields', [])
+        if not model_fields:
+            return model_metadata
+
+        # Ensure 'id' is always kept since it's the primary key and often needed
+        # We manually reserve it, so we only need to score the rest for top_N - 1
+        id_field = next((f for f in model_fields if f.get('name') == 'id'), None)
+        other_fields = [f for f in model_fields if f.get('name') != 'id']
+
+        if not other_fields:
+            return model_metadata
+
+        # 1. Embed query
+        query_emb = embeddings_model.embed_query(question)
+
+        # 2. Embed all field strings
+        field_strings = [
+            f"{f.get('string', '')} ({f.get('name', '')}): {f.get('type', '')}"
+            for f in other_fields
+        ]
+        
+        # Batch embed is much faster
+        try:
+            field_embs = embeddings_model.embed_documents(field_strings)
+        except Exception as e:
+            _logger.error(f"AskOdoo: Failed to embed fields for {model_metadata.get('model')}: {e}")
+            return model_metadata
+            
+        def cosine_sim(a, b):
+            dot_product = sum(x * y for x, y in zip(a, b))
+            mag_a = math.sqrt(sum(x * x for x in a))
+            mag_b = math.sqrt(sum(y * y for y in b))
+            if mag_a * mag_b == 0: return 0
+            return dot_product / (mag_a * mag_b)
+
+        # 3. Score fields
+        scored_fields = []
+        for i, field in enumerate(other_fields):
+            sim = cosine_sim(query_emb, field_embs[i])
+            scored_fields.append((sim, field))
+
+        # 4. Sort descending and pick top_N
+        scored_fields.sort(key=lambda x: x[0], reverse=True)
+        
+        allocated_slots = top_n - (1 if id_field else 0)
+        top_fields = [f for score, f in scored_fields[:allocated_slots]]
+        
+        if id_field:
+            top_fields.insert(0, id_field)
+
+        return {**model_metadata, 'fields': top_fields}
+
+    @api.model
+    def _get_relevant_schema(self, question):
+        """
+        Two-phase schema retrieval.
+
+        Phase 1: Vector similarity search retrieves the top-K most relevant
+                 *model* documents from the schema vector store.
+
+        Phase 2: For each retrieved model, apply _trim_fields_for_question()
+                 to remove fields that are irrelevant to the question. Relational
+                 fields and generic business fields are always preserved.
+
+        Returns a single context string (trimmed schema text) ready to inject
+        into the LLM prompt.
+        """
+        # ── Phase 1: Retrieve top-K relevant models ───────────────────────────
+        retriever = self._get_schema_retriever()
+        docs = retriever.invoke(question)
+
+        if not docs:
+            _logger.warning("AskOdoo: Phase 1 retrieval returned no schema docs.")
+            return "No relevant schema found."
+
+        # Extract the technical model names from the retrieved doc text.
+        # Each doc's first line is "Model: <human name> (<tech.name>)"
+        retrieved_model_names = []
+        for doc in docs:
+            first_line = doc.page_content.split('\n')[0]  # e.g. "Model: Sales Order (sale.order)"
+            match = re.search(r'\(([a-z][a-z0-9_.]+)\)', first_line)
+            if match:
+                retrieved_model_names.append(match.group(1))
+
+        _logger.info(
+            f"AskOdoo: [Phase 1] Retrieved {len(docs)} models: {retrieved_model_names}"
+        )
+
+        if not retrieved_model_names:
+            # Fallback: return raw doc text if we can't parse model names
+            _logger.warning("AskOdoo: Could not parse model names from docs. Using raw text.")
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        # ── Phase 2: Trim fields for each retrieved model ─────────────────────
+        context_parts = []
+        for model_name in retrieved_model_names:
+            if model_name not in self.env:
+                _logger.warning(f"AskOdoo: Model '{model_name}' not in registry, skipping.")
+                continue
+
+            current_model = self.env[model_name]
+            if current_model._abstract or current_model._transient:
+                continue
+
+            # Build the structured metadata dict for this model on the fly
+            # (same structure as _get_db_schema produces)
+            model_record = self.env['ir.model'].search(
+                [('model', '=', model_name)], limit=1
+            )
+            model_fields = []
+            for field_name, field_obj in current_model._fields.items():
+                model_fields.append({
+                    'name': field_name,
+                    'type': field_obj.type,
+                    'string': field_obj.string,
+                    'relation': getattr(field_obj, 'comodel_name', None),
+                })
+
+            model_metadata = {
+                'model': model_name,
+                'name': model_record.name if model_record else model_name,
+                'fields': model_fields,
+            }
+
+            # Apply Phase 2 trimming (Strict Vector Top-15)
+            original_count = len(model_fields)
+            embeddings = self._get_embeddings()
+            trimmed_metadata = self._vector_shortlist_fields(question, model_metadata, embeddings, top_n=15)
+            trimmed_count = len(trimmed_metadata['fields'])
+
+            _logger.info(
+                f"AskOdoo: [Phase 2] {model_name}: "
+                f"{original_count} fields → {trimmed_count} fields kept"
+            )
+
+            context_parts.append(self._schema_to_text(trimmed_metadata))
+
+        if not context_parts:
+            return "No relevant schema found."
+                
+        return "\n\n".join(context_parts)
 
     @api.model
     def refresh_schema_index(self):

@@ -30,13 +30,16 @@ class AskOdooModel(models.Model):
             temperature=0
         )
 
+    def _get_embeddings(self):
+        """Returns the shared HuggingFace embeddings model."""
+        if not type(self)._embeddings:
+            type(self)._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        return type(self)._embeddings
+
     def _get_retriever(self):
         if not type(self)._vector_store:
             # Initialize Embeddings
-            if not type(self)._embeddings:
-                # Use HuggingFaceEmbeddings as replacement for locally managed SentenceTransformer
-                # Ensure 'sentence_transformers' is installed or 'langchain_huggingface'
-                type(self)._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+            self._get_embeddings()
             
             # Initialize PGVector
             # Note: PGVector expects specific extension and tables. 
@@ -61,8 +64,7 @@ class AskOdooModel(models.Model):
         """
         if not type(self)._schema_vector_store:
             # Ensure Embeddings are ready
-            if not type(self)._embeddings:
-                type(self)._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+            self._get_embeddings()
 
             connection = self._get_connection_string()
             
@@ -77,10 +79,13 @@ class AskOdooModel(models.Model):
     def _get_schema_retriever(self):
         """
         Returns a retriever for the schema vector store.
+        k=5: Phase 1 fetches 5 model candidates; Phase 2 (_get_relevant_schema)
+        will trim each model's fields, so the extra candidates cost very little.
         """
         vector_store = self._get_schema_vector_store()
         return vector_store.as_retriever(
             search_type="similarity",
             search_kwargs={"k": 3}
         )
+
 
