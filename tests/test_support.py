@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 import types
+from datetime import date, datetime
 from pathlib import Path
 
 
@@ -26,12 +27,12 @@ def install_stubs():
     class _DateTime:
         @staticmethod
         def now():
-            return "NOW"
+            return datetime(2026, 1, 1, 0, 0, 0)
 
     class _Date:
         @staticmethod
         def today():
-            return "TODAY"
+            return date(2026, 1, 1)
 
     odoo_fields = types.ModuleType("odoo.fields")
     odoo_fields.Char = _field
