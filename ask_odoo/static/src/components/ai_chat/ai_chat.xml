@@ -1,40 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <templates xml:space="preserve">
     <t t-name="odoo_ai_chatbot.AiChat">
-        <div t-attf-class="o_ai_chat_root h-100 d-flex flex-column {{ state.darkMode ? 'o_dark_mode' : '' }}">
+        <div t-attf-class="o_ai_chat_root h-100 d-flex flex-column {{ state.darkMode ? 'o_dark_mode' : '' }}" t-on-click="_onGlobalClick">
             <Layout display="{controlPanel: false}" className="'flex-grow-1 d-flex flex-column overflow-hidden'">
                 
                 <div class="d-flex flex-row flex-grow-1 overflow-hidden">
-                    <!-- Sidebar -->
+                    <!-- ============================================================ -->
+                    <!-- SIDEBAR                                                      -->
+                    <!-- ============================================================ -->
                     <div t-attf-class="o_ai_sidebar d-flex flex-column {{ state.sidebarOpen ? 'p-3' : 'collapsed' }}">
                         
+                        <!-- Header: Mode Selector + Toggle -->
                         <div class="o_sidebar_header d-flex align-items-center mb-3 justify-content-between">
                             <div class="position-relative">
-                                <div class="d-flex align-items-center fw-bold fs-5 text-muted cursor-pointer user-select-none" t-on-click="toggleModeDropdown">
+                                <div class="d-flex align-items-center fw-bold fs-5 o_mode_selector cursor-pointer user-select-none" t-on-click="toggleModeDropdown">
                                     <span>
                                         <t t-if="state.chatMode === 'database'">Database</t>
                                         <t t-else="">Conversation</t>
                                     </span>
-                                    <i class="fa fa-chevron-down ms-2" style="font-size: 0.8rem; transition: transform 0.2s;" t-att-style="state.isModeDropdownOpen ? 'transform: rotate(180deg);' : ''"></i>
+                                    <i t-attf-class="fa fa-chevron-down ms-2 o_mode_chevron {{ state.isModeDropdownOpen ? 'open' : '' }}"></i>
                                 </div>
                                 
-                                <!-- Dropdown Menu -->
-                                <div t-if="state.isModeDropdownOpen" class="o_mode_dropdown position-absolute top-100 start-0 bg-white border rounded shadow-lg py-2 mt-2" style="z-index: 1000; min-width: 180px;">
+                                <!-- Mode Dropdown -->
+                                <div t-if="state.isModeDropdownOpen" class="o_mode_dropdown position-absolute top-100 start-0 py-1 mt-2">
                                     <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer" t-on-click="() => this.selectChatMode('conversation')">
-                                        <i class="fa fa-comments-o me-2 text-primary" style="width: 20px;"></i> 
+                                        <i class="fa fa-comments-o me-2" style="width: 20px; color: var(--ask-accent);"></i> 
                                         <span>Conversation</span>
-                                        <i t-if="state.chatMode === 'conversation'" class="fa fa-check ms-auto text-success small"></i>
+                                        <i t-if="state.chatMode === 'conversation'" class="fa fa-check ms-auto small" style="color: var(--ask-success);"></i>
                                     </div>
                                     <div class="dropdown-item d-flex align-items-center p-2 px-3 cursor-pointer" t-on-click="() => this.selectChatMode('database')">
-                                        <i class="fa fa-database me-2 text-warning" style="width: 20px;"></i> 
+                                        <i class="fa fa-database me-2" style="width: 20px; color: var(--ask-warning);"></i> 
                                         <span>Database</span>
-                                        <i t-if="state.chatMode === 'database'" class="fa fa-check ms-auto text-success small"></i>
+                                        <i t-if="state.chatMode === 'database'" class="fa fa-check ms-auto small" style="color: var(--ask-success);"></i>
                                     </div>
                                     <div class="dropdown-divider my-1"></div>
-                                    <div t-attf-class="dropdown-item d-flex align-items-center p-2 px-3 {{ state.isRefreshingSchema ? 'disabled' : 'cursor-pointer' }} text-muted" 
+                                    <div t-attf-class="dropdown-item d-flex align-items-center p-2 px-3 {{ state.isRefreshingSchema ? 'disabled' : 'cursor-pointer' }}" 
                                          t-on-click="refreshSchema"
-                                         t-att-style="state.isRefreshingSchema ? 'opacity: 0.6; pointer-events: none;' : ''">
-                                        <i class="fa fa-refresh me-2" t-att-class="{'fa-spin': state.isRefreshingSchema}" style="width: 20px;"></i> 
+                                         t-att-style="state.isRefreshingSchema ? 'opacity: 0.5; pointer-events: none;' : ''">
+                                        <i class="fa fa-refresh me-2" t-att-class="{'fa-spin': state.isRefreshingSchema}" style="width: 20px; color: var(--ask-text-muted);"></i> 
                                         <span>
                                             <t t-if="state.isRefreshingSchema">Refreshing...</t>
                                             <t t-else="">Refresh Schema</t>
@@ -42,30 +45,31 @@
                                     </div>
                                 </div>
                             </div>
-                            <button class="btn btn-link text-muted p-0 border-0" t-on-click="toggleSidebar" title="Close Sidebar">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sidebar">
+                            <button class="btn btn-link p-0 border-0 o_sidebar_toggle" t-on-click="toggleSidebar" title="Close Sidebar">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                                     <line x1="9" y1="3" x2="9" y2="21"></line>
                                 </svg>
                             </button>
                         </div>
 
-                        <button class="btn btn-outline-secondary w-100 mb-4 text-start d-flex align-items-center justify-content-between new-chat-btn" t-on-click="createNewChat">
+                        <!-- New Chat Button -->
+                        <button class="btn w-100 mb-4 text-start d-flex align-items-center justify-content-between new-chat-btn" t-on-click="createNewChat">
                             <span class="d-flex align-items-center"><i class="fa fa-plus me-2"></i> New Chat</span>
                             <i class="fa fa-pencil-square-o"></i>
                         </button>
 
+                        <!-- Conversations List -->
                         <div class="flex-grow-1 overflow-auto conversations-list custom-scrollbar">
-                            <div class="text-muted small mb-2 text-uppercase fw-bold" style="font-size: 0.75rem;">Today</div>
+                            <div class="text-uppercase fw-bold mb-2" style="font-size: 0.7rem; letter-spacing: 0.06em; color: var(--ask-text-muted);">Today</div>
                             <t t-foreach="state.conversations" t-as="chat" t-key="chat.id">
                                 <div t-attf-class="o_sidebar_item p-2 rounded mb-1 cursor-pointer d-flex align-items-center {{ state.currentChatId === chat.id ? 'active' : '' }}"
                                      t-on-click="() => this.selectChat(chat.id)">
                                     <span class="text-truncate flex-grow-1"><t t-esc="chat.title"/></span>
-                                    <!-- Three dots menu (visible on hover via CSS) -->
+                                    <!-- Context menu -->
                                     <div class="o_chat_menu position-relative ms-1" t-on-click.stop="() => this.toggleChatMenu(chat.id)">
-                                        <i class="fa fa-ellipsis-v text-muted px-1"></i>
-                                        <!-- Dropdown -->
-                                        <div t-if="state.openMenuChatId === chat.id" class="o_chat_dropdown position-absolute end-0 bg-white border rounded shadow-sm py-1" style="z-index: 1000; min-width: 130px; top: 100%;">
+                                        <i class="fa fa-ellipsis-v px-1"></i>
+                                        <div t-if="state.openMenuChatId === chat.id" class="o_chat_dropdown position-absolute end-0 py-1" style="min-width: 130px; top: 100%;">
                                             <div class="dropdown-item d-flex align-items-center px-3 py-2 cursor-pointer text-danger small" t-on-click.stop="() => this.deleteConversation(chat.id)">
                                                 <i class="fa fa-trash-o me-2"></i>
                                                 <span>Delete</span>
@@ -76,39 +80,56 @@
                             </t>
                         </div>
                         
-                        <div class="border-top pt-3 mt-3 opacity-75 sidebar-footer">
-                             <div class="d-flex align-items-center mb-3 cursor-pointer" t-on-click="switchToKnowledgeBase">
+                        <!-- Sidebar Footer -->
+                        <div class="border-top pt-3 mt-3 sidebar-footer">
+                             <div class="d-flex align-items-center mb-2 cursor-pointer o_footer_item" t-on-click="switchToKnowledgeBase">
                                  <i class="fa fa-book me-2"></i>
                                  <span class="small fw-bold">Knowledge Base</span>
                              </div>
-                             <div class="d-flex align-items-center mb-2 cursor-pointer" t-on-click="toggleTheme">
+                             <div class="d-flex align-items-center cursor-pointer o_footer_item" t-on-click="toggleTheme">
                                  <i t-attf-class="fa {{ state.darkMode ? 'fa-sun-o' : 'fa-moon-o' }} me-2"></i>
                                  <span class="small fw-bold"><t t-esc="state.darkMode ? 'Light Mode' : 'Dark Mode'"/></span>
                              </div>                            
                         </div>
                     </div>
 
-                    <!-- Main Chat Area -->
+                    <!-- ============================================================ -->
+                    <!-- MAIN CHAT AREA                                               -->
+                    <!-- ============================================================ -->
                     <div class="o_main_chat_area d-flex flex-column flex-grow-1 position-relative">
                         
-                        <!-- Floating Sidebar Toggle (Always valid to have available) -->
-                        <div class="position-absolute top-0 start-0 p-3" t-if="!state.sidebarOpen" style="z-index: 100;">
-                             <button class="btn btn-link text-muted p-0 border-0" t-on-click="toggleSidebar" title="Open Sidebar">
-                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-sidebar">
+                        <!-- Floating Sidebar Toggle -->
+                        <div class="position-absolute top-0 start-0 p-3 o_sidebar_float_toggle" t-if="!state.sidebarOpen">
+                             <button class="btn btn-link p-0 border-0 o_sidebar_toggle" t-on-click="toggleSidebar" title="Open Sidebar">
+                                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
                                     <line x1="9" y1="3" x2="9" y2="21"></line>
                                 </svg>
                             </button>
                         </div>
 
-                        <!-- View 1: Chat Interface -->
+                        <!-- ===== VIEW: Chat Interface ===== -->
                         <t t-if="state.currentView === 'chat'">
-                            <!-- Chat Content -->
                             <div class="o_ai_chat_content flex-grow-1 overflow-auto p-0 custom-scrollbar d-flex flex-column align-items-center" style="padding-bottom: 8rem !important;">
                                 
                                 <!-- Empty State -->
-                                <div t-if="state.messages.length === 0" class="flex-grow-1 d-flex flex-column justify-content-center align-items-center text-center w-100">
-                                    <h2 class="fw-bold mb-4">What's on your mind?</h2>
+                                <div t-if="state.messages.length === 0" class="o_empty_state flex-grow-1 d-flex flex-column justify-content-center align-items-center text-center w-100 px-4">
+                                    <div class="o_empty_icon">
+                                        <i class="fa fa-bolt"></i>
+                                    </div>
+                                    <h2>What can I help you with?</h2>
+                                    <p class="o_empty_subtitle">Ask me about your data, generate reports, or get insights from your Odoo system.</p>
+                                    <div class="o_suggestion_chips">
+                                        <div class="o_chip" t-on-click="() => this.sendSuggestion('Show me all available products')">
+                                            <i class="fa fa-cube me-1"></i> Show available products
+                                        </div>
+                                        <div class="o_chip" t-on-click="() => this.sendSuggestion('Show me recent sales orders')">
+                                            <i class="fa fa-shopping-cart me-1"></i> Recent sales orders
+                                        </div>
+                                        <div class="o_chip" t-on-click="() => this.sendSuggestion('Analyze current inventory levels')">
+                                            <i class="fa fa-bar-chart me-1"></i> Inventory analysis
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <!-- Messages Area -->
@@ -117,9 +138,9 @@
                                         
                                         <!-- CHART MESSAGE -->
                                         <t t-if="message.type === 'chart'">
-                                            <div class="d-flex mb-4 justify-content-start w-100">
-                                                <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #6366f1; min-width: 30px;">
-                                                    <i class="fa fa-bar-chart text-white small"></i>
+                                            <div class="o_message_row d-flex mb-4 justify-content-start w-100">
+                                                <div class="o_ai_avatar me-3 mt-1">
+                                                    <i class="fa fa-bar-chart"></i>
                                                 </div>
                                                 <div class="o_message_bubble o_message_ai o_chart_bubble p-3 rounded-3" style="max-width: 85%; width: 100%;">
                                                     <div class="o_chart_container">
@@ -130,23 +151,25 @@
                                         </t>
 
                                         <!-- STANDARD MESSAGES -->
-                                        <div t-else="" t-attf-class="d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
+                                        <div t-else="" t-attf-class="o_message_row d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
                                             
-                                            <div t-if="message.type === 'ai'" class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #19c37d;">
-                                                <i class="fa fa-bolt text-white small"></i>
+                                            <!-- AI Avatar -->
+                                            <div t-if="message.type === 'ai'" class="o_ai_avatar me-3 mt-1">
+                                                <i class="fa fa-bolt"></i>
                                             </div>
 
-                                            <div t-attf-class="o_message_bubble p-3 rounded-3 {{ message.type === 'user' ? 'o_message_user' : 'o_message_ai' }}" style="max-width: 85%;">
+                                            <div t-attf-class="o_message_bubble {{ message.type === 'user' ? 'o_message_user' : 'o_message_ai' }}" style="max-width: 85%;">
                                                 <div class="o_message_text" style="white-space: pre-wrap;">
                                                     <t t-out="message.text"/>
                                                 </div>
                                                 <t t-if="message.tableHtml">
-                                                    <div t-attf-class="table-responsive dataframe-wrapper mt-2 bg-white rounded border" 
+                                                    <div t-attf-class="dataframe-wrapper mt-2 rounded" 
                                                          t-att-style="message.isTableExpanded ? '' : 'max-height: 250px; overflow: hidden; position: relative;'">
                                                         <t t-out="message.tableHtml" />
-                                                        <div t-if="!message.isTableExpanded" style="position: absolute; bottom: 0; left: 0; right: 0; height: 60px; background: linear-gradient(to bottom, transparent, white);"></div>
+                                                        <div t-if="!message.isTableExpanded" class="o_table_fade"></div>
                                                     </div>
-                                                    <button class="btn btn-sm btn-light border mt-2 w-100 text-primary fw-bold" t-on-click="() => this.toggleTable(message)">
+                                                    <button t-attf-class="o_table_toggle_btn {{ message.isTableExpanded ? 'expanded' : '' }}" t-on-click="() => this.toggleTable(message)">
+                                                        <i class="fa fa-chevron-down"></i>
                                                         <t t-esc="message.isTableExpanded ? 'Collapse Table' : 'Expand Table'"/>
                                                     </button>
                                                 </t>
@@ -154,12 +177,13 @@
                                         </div>
                                     </t>
                                     
-                                    <div t-if="state.isTyping" class="d-flex mb-4 justify-content-start">
-                                        <div class="o_ai_avatar me-3 rounded-circle d-flex align-items-center justify-content-center" style="width: 30px; height: 30px; background: #19c37d;">
-                                            <i class="fa fa-bolt text-white small"></i>
+                                    <!-- Typing Indicator -->
+                                    <div t-if="state.isTyping" class="o_message_row d-flex mb-4 justify-content-start">
+                                        <div class="o_ai_avatar me-3 mt-1">
+                                            <i class="fa fa-bolt"></i>
                                         </div>
-                                        <div class="o_message_bubble o_message_ai p-3 rounded-3">
-                                            <div class="o_typing_indicator"><span>.</span><span>.</span><span>.</span></div>
+                                        <div class="o_message_bubble o_message_ai p-3">
+                                            <div class="o_typing_indicator"><span></span><span></span><span></span></div>
                                         </div>
                                     </div>
                                     <div t-ref="messagesEnd"></div>
@@ -167,93 +191,94 @@
                             </div>
 
                             <!-- Input Area (Fixed Bottom) -->
-                            <div class="o_chat_input_section w-100 p-4">
+                            <div class="o_chat_input_section w-100">
                                 <div class="o_ai_chat_input_container mx-auto position-relative">
-                                    <div class="input-group shadow-sm rounded-4 overflow-hidden border">
+                                    <div class="o_input_bar">
                                         <input type="text" 
-                                            class="form-control border-0 p-3 shadow-none" 
+                                            class="form-control border-0 shadow-none" 
                                             t-model="state.input"
                                             t-on-keydown="_onKeyDown"
                                             autofocus="autofocus"
                                             t-att-placeholder="state.isListening ? 'Listening...' : 'Message AskOdoo...'"/>
                                         
                                         <!-- Voice Input Button -->
-                                        <button t-attf-class="btn border-0 px-2 o_voice_btn {{ state.isListening ? 'o_voice_active' : '' }}" 
+                                        <button t-attf-class="o_voice_btn {{ state.isListening ? 'o_voice_active' : '' }}" 
                                                 type="button"
                                                 t-on-click="toggleVoiceInput"
                                                 t-att-disabled="state.isTyping"
                                                 title="Voice Input">
-                                            <i t-attf-class="fa {{ state.isListening ? 'fa-stop-circle' : 'fa-microphone' }} p-2 rounded-circle"
-                                               t-attf-style="{{ state.isListening ? 'background: #ef4444; color: white;' : 'color: #8e8ea0;' }}"></i>
+                                            <span class="o_voice_icon">
+                                                <i t-attf-class="fa {{ state.isListening ? 'fa-stop-circle' : 'fa-microphone' }}"></i>
+                                            </span>
                                         </button>
 
-                                        <button class="btn border-0 px-3" 
+                                        <!-- Send Button -->
+                                        <button t-attf-class="o_send_btn {{ state.input ? 'o_send_ready' : '' }}" 
                                                 type="button"
                                                 t-on-click="sendMessage"
-                                                t-att-disabled="!state.input or state.isTyping"
-                                                t-attf-class="{{ state.input ? 'text-primary' : 'text-muted' }}">
-                                            <i class="fa fa-arrow-up p-2 rounded-circle" t-attf-style="{{ state.input ? 'background: black; color: white;' : 'background: #e5e5e5;' }}"></i>
+                                                t-att-disabled="!state.input or state.isTyping">
+                                            <span class="o_send_icon">
+                                                <i class="fa fa-arrow-up"></i>
+                                            </span>
                                         </button>
                                     </div>                        
                                 </div>
                             </div>
                         </t>
 
-                        <!-- View 2: Knowledge Base Interface -->
+                        <!-- ===== VIEW: Knowledge Base ===== -->
                         <t t-if="state.currentView === 'knowledge_base'">
                             <div class="o_knowledge_base_view h-100 w-100 p-5 overflow-auto custom-scrollbar">
                                 <div class="container p-0" style="max-width: 1000px;">
                                     <h1 class="fw-bold mb-4">Knowledge Base</h1>
 
-                                    <!-- Search & Upload Bar -->
+                                    <!-- Search + Upload Bar -->
                                     <div class="d-flex mb-4">
                                         <div class="position-relative flex-grow-1 me-3">
-                                            <i class="fa fa-search position-absolute text-muted" style="left: 15px; top: 50%; transform: translateY(-50%);"></i>
+                                            <i class="fa fa-search position-absolute" style="left: 15px; top: 50%; transform: translateY(-50%); color: var(--ask-text-muted);"></i>
                                             <input type="text" 
-                                                   class="form-control rounded-1 border py-2 ps-5" 
-                                                   style="background-color: transparent;"
+                                                   class="form-control o_kb_search py-2 ps-5" 
                                                    placeholder="Search manuals, guides, and SOPs..."/>
                                         </div>
                                         <input type="file" class="d-none" t-ref="fileInput" accept=".pdf" t-on-change="onFileUpload"/>
-                                        <button class="btn btn-primary rounded-1 px-4 btn-upload" t-on-click="triggerUpload">
-                                            Upload New Document
+                                        <button class="btn btn-upload" t-on-click="triggerUpload">
+                                            <i class="fa fa-cloud-upload me-2"></i>Upload Document
                                         </button>
                                     </div>
 
                                     <!-- Document List -->
                                     <div class="document-list border-top">
                                         <t t-if="state.documents.length === 0">
-                                            <div class="text-center text-muted py-5">
+                                            <div class="text-center py-5 o_kb_empty">
                                                 <i class="fa fa-folder-open-o fa-3x mb-3"></i>
-                                                <p>No documents found.</p>
+                                                <p>No documents found. Upload a PDF to get started.</p>
                                             </div>
                                         </t>
                                         <t t-foreach="state.documents" t-as="doc" t-key="doc.id">
-                                            <div t-attf-class="document-item d-flex align-items-center py-3 border-bottom {{ doc.processing ? 'bg-light' : '' }}" 
-                                                 t-att-style="doc.processing ? 'opacity: 0.6;' : ''">
+                                            <div t-attf-class="document-item d-flex align-items-center py-3 {{ doc.processing ? 'opacity-50' : '' }}">
                                                 <!-- Icon -->
-                                                <div class="doc-icon me-3 text-danger">
+                                                <div class="doc-icon me-3">
                                                     <i class="fa fa-file-pdf-o fa-2x"></i>
                                                 </div>
                                                 <!-- Text -->
                                                 <div class="flex-grow-1">
-                                                    <div class="fw-bold mb-0 text-dark doc-title"><t t-esc="doc.name"/></div>
-                                                    <div class="text-muted small mb-0 doc-desc"><t t-esc="doc.description"/></div>
-                                                    <div class="text-muted small doc-meta" style="font-size: 0.75rem;">Last updated: <t t-esc="doc.lastUpdated"/></div>
+                                                    <div class="doc-title mb-0"><t t-esc="doc.name"/></div>
+                                                    <div class="doc-desc small mb-0"><t t-esc="doc.description"/></div>
+                                                    <div class="doc-meta">Last updated: <t t-esc="doc.lastUpdated"/></div>
                                                 </div>
-                                                <!-- Action -->
-                                                <div t-if="!doc.processing">
-                                                    <button class="btn btn-primary btn-sm rounded-1 px-3 ms-3 btn-view">
+                                                <!-- Actions -->
+                                                <div t-if="!doc.processing" class="d-flex align-items-center">
+                                                    <button class="btn btn-view btn-sm px-3 ms-3">
                                                         View
                                                     </button>
-                                                    <button class="btn btn-outline-danger btn-sm rounded-1 px-3 ms-2 btn-delete" 
+                                                    <button class="btn btn-outline-secondary btn-sm btn-delete px-3 ms-2" 
                                                             t-on-click="() => this.deleteDocument(doc.id)"
                                                             title="Delete Document">
                                                         <i class="fa fa-trash-o"></i>
                                                     </button>
                                                 </div>
                                                 <!-- Processing Indicator -->
-                                                <div t-else="" class="ms-3 d-flex align-items-center text-primary">
+                                                <div t-else="" class="ms-3 d-flex align-items-center o_processing_indicator">
                                                     <i class="fa fa-circle-o-notch fa-spin me-2"></i>
                                                     <span class="small fw-bold">Processing</span>
                                                 </div>
@@ -270,4 +295,5 @@
             </Layout>
         </div>
     </t>
+
 </templates>

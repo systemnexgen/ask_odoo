@@ -12,13 +12,17 @@ export class AiChat extends Component {
     setup() {
         this.orm = useService("orm");
         this.notification = useService("notification");
+
+        // Restore dark mode from localStorage
+        const savedDarkMode = localStorage.getItem('askOdooDarkMode');
+
         this.state = useState({
             conversations: [],
             messages: [],
             input: "",
             isTyping: false,
             currentChatId: null,
-            darkMode: false,
+            darkMode: savedDarkMode === 'true',
             sidebarOpen: true,
             currentView: 'chat',
             documents: [], // For Knowledge Base
@@ -57,6 +61,7 @@ export class AiChat extends Component {
 
     toggleTheme() {
         this.state.darkMode = !this.state.darkMode;
+        localStorage.setItem('askOdooDarkMode', this.state.darkMode);
     }
 
     toggleSidebar() {
@@ -70,6 +75,34 @@ export class AiChat extends Component {
     selectChatMode(mode) {
         this.state.chatMode = mode;
         this.state.isModeDropdownOpen = false;
+    }
+
+    /**
+     * Close all open dropdowns when clicking outside.
+     */
+    _onGlobalClick(ev) {
+        // Close mode dropdown if clicking outside it
+        if (this.state.isModeDropdownOpen) {
+            const modeArea = ev.target.closest('.o_mode_selector, .o_mode_dropdown');
+            if (!modeArea) {
+                this.state.isModeDropdownOpen = false;
+            }
+        }
+        // Close chat context menu if clicking outside it
+        if (this.state.openMenuChatId !== null) {
+            const menuArea = ev.target.closest('.o_chat_menu');
+            if (!menuArea) {
+                this.state.openMenuChatId = null;
+            }
+        }
+    }
+
+    /**
+     * Handle suggestion chip clicks — pre-fill input and send.
+     */
+    sendSuggestion(text) {
+        this.state.input = text;
+        this.sendMessage();
     }
 
     async refreshSchema() {
