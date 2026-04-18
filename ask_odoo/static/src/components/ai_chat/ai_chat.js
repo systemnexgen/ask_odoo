@@ -456,7 +456,7 @@ export class AiChat extends Component {
                             avatar: '⚙️'
                         });
                     } else {
-                        messageContent = this.formatMessage(`✅ **Action Executed:**\n${result.execution_result.result}`);
+                        messageContent = this.formatMessage(`${result.execution_result.result}`);
                         this.state.messages.push({
                             id: Date.now() + 3,
                             text: messageContent,

@@ -2,10 +2,9 @@ from odoo import models, fields, api
 import logging
 import base64
 import re
-import math
+import numpy as np
 from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_text_splitters import CharacterTextSplitter
 
 _logger = logging.getLogger(__name__)
 
@@ -48,24 +47,19 @@ class AskOdooModel(models.Model):
             _logger.error(f"AskOdoo: Failed to embed fields for {model_metadata.get('model')}: {e}")
             return model_metadata
             
-        def cosine_sim(a, b):
-            dot_product = sum(x * y for x, y in zip(a, b))
-            mag_a = math.sqrt(sum(x * x for x in a))
-            mag_b = math.sqrt(sum(y * y for y in b))
-            if mag_a * mag_b == 0: return 0
-            return dot_product / (mag_a * mag_b)
+        # 3. Vectorised cosine similarity via numpy
+        query_vec = np.array(query_emb)
+        field_mat = np.array(field_embs)
 
-        # 3. Score fields
-        scored_fields = []
-        for i, field in enumerate(other_fields):
-            sim = cosine_sim(query_emb, field_embs[i])
-            scored_fields.append((sim, field))
+        # Normalise to unit vectors (avoid division by zero)
+        query_norm = query_vec / (np.linalg.norm(query_vec) + 1e-10)
+        field_norms = field_mat / (np.linalg.norm(field_mat, axis=1, keepdims=True) + 1e-10)
+        scores = field_norms @ query_norm  # shape: (n_fields,)
 
-        # 4. Sort descending and pick top_N
-        scored_fields.sort(key=lambda x: x[0], reverse=True)
-        
+        # 4. Pick top-N field indices
         allocated_slots = top_n - (1 if id_field else 0)
-        top_fields = [f for score, f in scored_fields[:allocated_slots]]
+        top_indices = np.argsort(scores)[::-1][:allocated_slots]
+        top_fields = [other_fields[i] for i in top_indices]
         
         if id_field:
             top_fields.insert(0, id_field)
@@ -218,44 +212,47 @@ class AskOdooModel(models.Model):
         eof_marker = "\n\n" + "="*50 + "\n=== END OF SCHEMA SNAPSHOT ===\n"
         clean_corpus = full_corpus.replace(eof_marker, "")
         
-        # 1 doc for the entire schema only
-        schema_doc = Document(page_content=clean_corpus, metadata={'source': 'schema_snapshot'})
+        # Split directly using python to bypass CharacterTextSplitter chunk_size warnings
+        raw_chunks = clean_corpus.split(separator)
+        documents = []
+        for chunk in raw_chunks:
+            chunk = chunk.strip()
+            if chunk:
+                documents.append(Document(page_content=chunk, metadata={'source': 'schema_snapshot'}))
+                
+        _logger.info(f"AskOdoo: Created {len(documents)} document chunks locally.")
         
-        # Chunking based on ==================================================
-        text_splitter = CharacterTextSplitter(
-            separator=separator,
-            chunk_size=1,
-            chunk_overlap=0,
-            keep_separator=False
-        )
-        documents = text_splitter.split_documents([schema_doc])
-        
-        # 5. Add to Vector Store
         # 5. Add to Vector Store
         if documents:
+            _logger.info("AskOdoo: Calling _get_schema_vector_store()...")
             v_store = self._get_schema_vector_store()
+            _logger.info("AskOdoo: Finished _get_schema_vector_store(). Deleting collection...")
             
             # Clear existing collection to prevent duplicates
             try:
                 v_store.delete_collection()
-                _logger.info("AskOdoo: Cleared existing schema collection.")
+                _logger.info("AskOdoo: Cleared existing schema collection. Re-initializing PGVector...")
                 
                 # IMPORTANT: The collection is now gone from the DB.
                 # We MUST re-initialize the PGVector store so it recreates the collection.
-                # If we use the old 'v_store' object, it errors with "Collection not found".
-                type(self)._schema_vector_store = None
+                import odoo.addons.ask_odoo.models.llm as _llm_mod
+                _llm_mod._schema_vector_store_instance = None
                 v_store = self._get_schema_vector_store()
+                _logger.info("AskOdoo: PGVector re-initialized.")
                 
             except Exception as e:
-                # If collection didn't exist, that's fine.
-                # But we should ensure we have a valid store for adding.
                 _logger.warning(f"AskOdoo: Warning during collection cleanup: {e}")
-                # Optional: Force re-init if unsure, but usually only needed on success
                 if "not found" in str(e).lower():
-                     type(self)._schema_vector_store = None
-                     v_store = self._get_schema_vector_store()
+                    import odoo.addons.ask_odoo.models.llm as _llm_mod
+                    _llm_mod._schema_vector_store_instance = None
+                    v_store = self._get_schema_vector_store()
             
-            v_store.add_documents(documents)
+            _logger.info(f"AskOdoo: Starting add_documents with {len(documents)} chunks...")
+            batch_size = 50
+            for i in range(0, len(documents), batch_size):
+                batch = documents[i:i+batch_size]
+                _logger.info(f"AskOdoo: Indexing batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1} ({len(batch)} chunks)...")
+                v_store.add_documents(batch)
             _logger.info(f"AskOdoo: Indexed {len(documents)} schema chunks from snapshot.")
             
         return True
@@ -313,7 +310,8 @@ class AskOdooModel(models.Model):
                                 'name': attr_name,
                                 'description': doc or "No description available."
                             })
-                    except:
+                    except (AttributeError, TypeError, Exception) as e:
+                        _logger.debug("Could not inspect method %s: %s", attr_name, e)
                         continue
 
             # Build metadata dictionary

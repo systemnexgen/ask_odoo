@@ -3,13 +3,13 @@ import tempfile
 import os
 import logging
 from odoo import models, fields, api
-from odoo.tools import config
+from .utils import get_pg_connection_string
 
 from langchain_postgres.vectorstores import PGVector
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
+
 
 _logger = logging.getLogger(__name__)
 
@@ -26,9 +26,7 @@ class KnowledgeBaseDocument(models.Model):
     processed_content = fields.Text(string='Processed Text')
     vector_id = fields.Char(string='Vector DB ID') # Legacy field
     
-    # Caches
-    _vector_store = None
-    _embeddings = None
+    # Caches using module-level locking
 
     @api.model
     def create_document(self, name, file_content, file_name):
@@ -45,25 +43,27 @@ class KnowledgeBaseDocument(models.Model):
         return doc.id
 
     def _get_connection_string(self):
-        db_name = self.env.cr.dbname
-        user = config.get('db_user')
-        password = config.get('db_password')
-        host = config.get('db_host') or 'localhost'
-        port = config.get('db_port') or 5432
-        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
+        return get_pg_connection_string(self.env)
 
     def process_document(self):
         """Processes the PDF content, chunks it, and generates embeddings using LangChain PGVector."""
-        
         # 1. Initialize Components
         connection = self._get_connection_string()
         
-        # Singleton-ish pattern for efficiency if processing multiple docs in one transaction
-        if not KnowledgeBaseDocument._embeddings:
-             KnowledgeBaseDocument._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        # Reuse the singleton embeddings instance from llm.py
+        from .llm import _embeddings_instance, _LOCK
+        import threading
+        local_instance = _embeddings_instance
+        if local_instance is None:
+            with _LOCK:
+                from . import llm as _llm_mod
+                if _llm_mod._embeddings_instance is None:
+                    from langchain_huggingface import HuggingFaceEmbeddings
+                    _llm_mod._embeddings_instance = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+                local_instance = _llm_mod._embeddings_instance
         
         vector_store = PGVector(
-            embeddings=KnowledgeBaseDocument._embeddings,
+            embeddings=local_instance,
             collection_name="ask_odoo_knowledge_chunk",
             connection=connection,
             use_jsonb=True,

@@ -14,10 +14,7 @@ class AskOdooModel(models.Model):
 
     gemini_api_key = fields.Char(required=False)
 
-    # Embedding Model Cache
-    _vector_store = None
-    _schema_vector_store = None
-    _embeddings = None
+    # Embedding Model Cache uses module-level singletons in llm.py and knowledge_base.py
 
     # ==========================
     # PUBLIC ENTRY POINT (RPC)

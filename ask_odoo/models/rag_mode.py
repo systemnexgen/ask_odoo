@@ -12,25 +12,12 @@ class AskOdooModel(models.Model):
         """
         Main orchestrator using LangChain.
         """
-        _logger.info(f"AskOdoo: Processing message in mode: {chat_mode}")
+        _logger.info("AskOdoo: Processing message in mode: %s", chat_mode)
 
         # 1. Handle Conversation
-        if conversation_id:
-            conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
-        else:
-            conversation = self.env['ask.odoo.conversation'].create({
-                'name': 'New Chat',  # Will serve as temporary title
-                'user_id': self.env.user.id
-            })
+        conversation, user_msg = self._ensure_conversation(message, conversation_id)
 
-        # 2. Save User Message
-        user_msg = self.env['ask.odoo.message'].create({
-            'conversation_id': conversation.id,
-            'type': 'user',
-            'content': message,
-        })
-
-        # 3. Build & Run Chain
+        # 2. Build & Run Chain
         try:
             # Prepare Components
             llm = self._get_llm()
@@ -45,7 +32,10 @@ class AskOdooModel(models.Model):
                 return "\n\n".join(doc.page_content for doc in docs) if docs else "No documents found."
             context_text = format_docs(docs)
             
-            _logger.info(f"\n=== [AskOdoo] DEBUG: Context Retrieved ===\n{context_text}\n===========================================")
+            _logger.info(
+                "\n=== [AskOdoo] DEBUG: Context Retrieved ===\n%s\n===========================================",
+                context_text,
+            )
 
             # 2. Prepare Prompt
             system_template = (
@@ -69,13 +59,19 @@ class AskOdooModel(models.Model):
             
             # Log the full prompt payload (as text representation)
             prompt_debug_str = "\n".join([f"[{m.type.upper()}]: {m.content}" for m in prompt_messages])
-            _logger.info(f"\n=== [AskOdoo] DEBUG: Full Prompt Payload ===\n{prompt_debug_str}\n============================================")
+            _logger.info(
+                "\n=== [AskOdoo] DEBUG: Full Prompt Payload ===\n%s\n============================================",
+                prompt_debug_str,
+            )
 
             # 4. Invoke LLM directly
             ai_message = llm.invoke(prompt_messages)
             response_text = ai_message.content
             
-            _logger.info(f"\n=== [AskOdoo] DEBUG: LLM Response ===\n{response_text}\n=====================================")
+            _logger.info(
+                "\n=== [AskOdoo] DEBUG: LLM Response ===\n%s\n=====================================",
+                response_text,
+            )
 
 
         except Exception as e:
@@ -90,16 +86,10 @@ class AskOdooModel(models.Model):
         })
 
         # 5. Update Last Activity & Title (if new)
-        conversation.write({'last_activity': fields.Datetime.now()})
-
-        if len(conversation.message_ids) <= 2:
-            # Generate a short title based on the first user message
-            title = message[:30] + "..." if len(message) > 30 else message
-            conversation.write({'name': title})
+        self._update_conversation_metadata(conversation, message)
 
         return {
             'response': response_text,
             'conversation_id': conversation.id,
             'title': conversation.name
         }
-

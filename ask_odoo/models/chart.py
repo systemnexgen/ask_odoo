@@ -7,60 +7,40 @@ _logger = logging.getLogger(__name__)
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
 
-    def _detect_chart_data(self, df):
-        """
-        Analyzes a Pandas DataFrame and returns Chart.js-compatible JSON
-        if the data is suitable for visualization. Returns None otherwise.
+    def _normalize_column(self, df, key):
+        """Find the closest matching column name, case-insensitive."""
+        key_lower = str(key).lower().replace(' ', '_')
+        for col in df.columns:
+            if str(col).lower().replace(' ', '_') == key_lower:
+                return col
+        return None
 
-        Auto-selects chart type:
-          - Line chart: if the label column looks like dates/time
-          - Pie/Doughnut: if ≤7 categories and only 1 numeric column
-          - Bar chart: default for everything else
+    def _generate_explicit_chart(self, df, chart_config):
+        """
+        Generates chart data based on explicit chart_config requested by the user.
+        Raises ValueError or returns None if the structure is invalid.
         """
         try:
-            if df is None or df.empty or len(df) < 2:
+            if df is None or df.empty or not isinstance(chart_config, dict):
                 return None
 
-            # Classify columns into labels (text/object) and values (numeric)
-            label_cols = []
-            value_cols = []
+            chart_type = chart_config.get('type', 'bar')
+            x_col_key = chart_config.get('x')
+            y_col_keys = chart_config.get('y', [])
+            
+            if not isinstance(y_col_keys, list):
+                y_col_keys = [y_col_keys]
 
-            for col in df.columns:
-                col_str = str(col)
-                # Skip columns named 'id' or ending in '_id' — not useful for charts
-                if col_str.lower() == 'id' or col_str.lower().endswith('_id'):
-                    continue
-
-                if pd.api.types.is_numeric_dtype(df[col]):
-                    value_cols.append(col)
-                elif pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]):
-                    label_cols.append(col)
-
-            # Need at least 1 label column and 1 numeric column
-            if not label_cols or not value_cols:
+            if not x_col_key or not y_col_keys:
+                _logger.warning("AskOdoo: chart_config missing 'x' or 'y' keys.")
                 return None
 
-            # Use the first label column as the X-axis
-            label_col = label_cols[0]
-            labels = df[label_col].astype(str).tolist()
-
-            # Cap at 50 data points for readability
-            if len(labels) > 50:
+            x_col = self._normalize_column(df, x_col_key)
+            if not x_col:
+                _logger.warning(f"AskOdoo: X column '{x_col_key}' not found in DataFrame.")
                 return None
-
-            # ── Chart Type Selection ──────────────────────────────────
-            chart_type = 'bar'  # default
-
-            # Check if labels look like dates/time → line chart
-            is_time_series = False
-            date_keywords = ['date', 'month', 'year', 'week', 'day', 'time', 'period', 'quarter']
-            if any(kw in str(label_col).lower() for kw in date_keywords):
-                is_time_series = True
-                chart_type = 'line'
-
-            # Small categories with single metric → pie chart
-            if len(labels) <= 7 and len(value_cols) == 1 and not is_time_series:
-                chart_type = 'doughnut'
+                
+            labels = df[x_col].astype(str).tolist()
 
             # ── Color Palette ─────────────────────────────────────────
             colors = [
@@ -79,16 +59,20 @@ class AskOdooModel(models.Model):
 
             # ── Build Datasets ────────────────────────────────────────
             datasets = []
-            for i, vcol in enumerate(value_cols):
+            for i, y_col_key in enumerate(y_col_keys):
+                y_col = self._normalize_column(df, y_col_key)
+                if not y_col:
+                    continue
+                    
                 # Convert values, coercing errors to 0
-                values = pd.to_numeric(df[vcol], errors='coerce').fillna(0).tolist()
+                values = pd.to_numeric(df[y_col], errors='coerce').fillna(0).tolist()
 
                 dataset = {
-                    'label': str(vcol),
+                    'label': str(y_col),
                     'data': values,
                 }
 
-                if chart_type == 'doughnut':
+                if chart_type in ['pie', 'doughnut']:
                     # Pie/doughnut: each slice gets a different color
                     dataset['backgroundColor'] = colors[:len(values)]
                     dataset['borderColor'] = border_colors[:len(values)]
@@ -106,17 +90,21 @@ class AskOdooModel(models.Model):
 
                 datasets.append(dataset)
 
+            if not datasets:
+                _logger.warning("AskOdoo: No valid Y columns found for chart.")
+                return None
+
             chart_data = {
                 'type': chart_type,
                 'labels': labels,
                 'datasets': datasets,
-                'title': f"{', '.join(str(v) for v in value_cols)} by {label_col}",
+                'title': f"{', '.join(str(ds['label']) for ds in datasets)} by {x_col}",
             }
 
-            _logger.info(f"AskOdoo: Chart detected — type={chart_type}, labels={len(labels)}, datasets={len(datasets)}")
+            _logger.info(f"AskOdoo: Explicit chart generated — type={chart_type}, labels={len(labels)}, datasets={len(datasets)}")
             return chart_data
 
         except Exception as e:
-            _logger.warning(f"AskOdoo: Chart detection failed (non-critical): {e}")
+            _logger.warning(f"AskOdoo: Explicit chart generation failed: {e}")
             return None
 

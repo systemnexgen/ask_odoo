@@ -3,6 +3,7 @@ from odoo.tools.safe_eval import safe_eval
 import re
 import logging
 import json
+from datetime import timedelta
 import pandas as pd
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
@@ -10,8 +11,104 @@ from .prompts import get_db_mode_prompt
 
 _logger = logging.getLogger(__name__)
 
+# ── Constants ────────────────────────────────────────────────────────────────
+MAX_CODE_RETRIES = 3            # Silent LLM retries for model validation
+MAX_EXECUTION_RETRIES = 3       # Auto-retries for code execution errors
+RESULT_PREVIEW_LENGTH = 300     # Max chars for result preview in history
+_CODE_BLOCK_RE = re.compile(r"```python\n(.*?)\n```", re.DOTALL)
+
+
+# ── Read-Only Proxies for Code Execution ─────────────────────────────────────
+# These prevent LLM-generated code from calling write/unlink/sudo etc.
+
+class _ReadOnlyModel:
+    """Proxy that only exposes read operations on an Odoo model."""
+    _ALLOWED_METHODS = frozenset({
+        'search', 'search_read', 'search_count', 'read_group',
+        'browse', 'read', 'mapped', 'filtered', 'sorted',
+        'ids', 'name_get', 'fields_get',
+    })
+    _ALLOWED_ATTRS = frozenset({
+        '_name', '_description', 'id', 'ids', 'display_name',
+        'env',  # needed for traversing relations like record.partner_id.name
+    })
+
+    def __init__(self, model):
+        object.__setattr__(self, '_model', model)
+
+    def __getattr__(self, name):
+        if name in self._ALLOWED_METHODS or name in self._ALLOWED_ATTRS:
+            attr = getattr(self._model, name)
+            # Wrap returned recordsets so chained access is also read-only
+            if hasattr(attr, '_name') and hasattr(attr, 'mapped'):
+                return _ReadOnlyModel(attr)
+            return attr
+        raise PermissionError(
+            f"Operation '{name}' is not allowed in read-only mode. "
+            f"Only these operations are permitted: {', '.join(sorted(self._ALLOWED_METHODS))}"
+        )
+
+    def __iter__(self):
+        return iter(self._model)
+
+    def __len__(self):
+        return len(self._model)
+
+    def __bool__(self):
+        return bool(self._model)
+
+    def __repr__(self):
+        return f"ReadOnly({self._model!r})"
+
+
+class _ReadOnlyEnv:
+    """Proxy around ``self.env`` that returns ReadOnlyModel wrappers."""
+
+    def __init__(self, env):
+        object.__setattr__(self, '_env', env)
+
+    def __getitem__(self, model_name):
+        return _ReadOnlyModel(self._env[model_name])
+
+    def __contains__(self, item):
+        return item in self._env
+
+    @property
+    def user(self):
+        return self._env.user
+
+    @property
+    def company(self):
+        return self._env.company
+
+
+class _ReadOnlySelf:
+    """Proxy around ``self`` that only exposes env (read-only)."""
+
+    def __init__(self, model_instance):
+        object.__setattr__(self, '_instance', model_instance)
+
+    @property
+    def env(self):
+        return _ReadOnlyEnv(self._instance.env)
+
+
+
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
+
+    # ── Helpers ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_code_block(text):
+        """Extract a Python code block from LLM response text.
+
+        Returns (has_code: bool, code: str | None).
+        """
+        match = _CODE_BLOCK_RE.search(text)
+        if match:
+            return True, match.group(1).strip()
+        return False, None
 
     def process_message_db(self, message, conversation_id=None):
         """
@@ -22,20 +119,10 @@ class AskOdooModel(models.Model):
         _logger.info("AskOdoo: Processing message in DATABASE mode")
 
         # 1. Handle Conversation
-        if conversation_id:
-            conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
-        else:
-            conversation = self.env['ask.odoo.conversation'].create({
-                'name': 'New DB Chat',
-                'user_id': self.env.user.id
-            })
+        conversation, user_msg = self._ensure_conversation(
+            message, conversation_id, default_name='New DB Chat'
+        )
 
-        # 2. Save User Message
-        user_msg = self.env['ask.odoo.message'].create({
-            'conversation_id': conversation.id,
-            'type': 'user',
-            'content': message,
-        })
         context_text = "No context available."
         try:
             # 3. Components
@@ -48,7 +135,8 @@ class AskOdooModel(models.Model):
             context_text = self._get_relevant_schema(message)
 
             _logger.info(
-                f"\n=== [AskOdoo][DB MODE] Schema Context ===\n{context_text}\n========================================="
+                "\n=== [AskOdoo][DB MODE] Schema Context ===\n%s\n=========================================",
+                context_text,
             )
 
             # 5. Database-Specific Prompt
@@ -72,11 +160,11 @@ class AskOdooModel(models.Model):
             # every self.env['model.name'] reference in the generated code
             # actually exists in the Odoo registry. If not, we feed the error
             # back to the LLM as additional messages and try again—silently.
-            MAX_CODE_RETRIES = 3
+            MAX_LLM_RETRIES = MAX_CODE_RETRIES
             messages_for_llm = prompt_messages  # start with the original prompt
             response_text = ""
 
-            for attempt in range(MAX_CODE_RETRIES + 1):
+            for attempt in range(MAX_LLM_RETRIES + 1):
                 ai_message = llm.invoke(messages_for_llm)
                 response_text = ai_message.content
 
@@ -86,19 +174,18 @@ class AskOdooModel(models.Model):
                 )
 
                 # Extract candidate code
-                code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
-                if not code_match:
+                has_candidate, candidate_code = self._extract_code_block(response_text)
+                if not has_candidate:
                     # No code block — nothing to validate, return as-is
                     break
 
-                candidate_code = code_match.group(1).strip()
                 is_valid, val_error = self._validate_code_models(candidate_code)
 
                 if is_valid:
                     _logger.info(f"AskOdoo: Code passed model validation on attempt {attempt + 1}.")
                     break
 
-                if attempt < MAX_CODE_RETRIES:
+                if attempt < MAX_LLM_RETRIES:
                     _logger.warning(
                         f"AskOdoo: Code validation failed (attempt {attempt + 1}): {val_error}. "
                         f"Silently retrying..."
@@ -116,8 +203,8 @@ class AskOdooModel(models.Model):
                     ]
                 else:
                     _logger.error(
-                        f"AskOdoo: Code still invalid after {MAX_CODE_RETRIES} retries. "
-                        f"Returning last response to user."
+                        "AskOdoo: Code still invalid after %d retries. "
+                        "Returning last response to user.", MAX_CODE_RETRIES,
                     )
 
         except Exception as e:
@@ -126,11 +213,7 @@ class AskOdooModel(models.Model):
 
         # 7. Extract Code if present
         execution_result = None
-        has_code = False
-        code_match = re.search(r"```python\n(.*?)\n```", response_text, re.DOTALL)
-        if code_match:
-            has_code = True
-            action_code = code_match.group(1).strip()
+        has_code, action_code = self._extract_code_block(response_text)
 
         # 8. Save AI Message (Hidden if code is executed so UI doesn't show explanation)
         self.env['ask.odoo.message'].create({
@@ -140,12 +223,7 @@ class AskOdooModel(models.Model):
         })
 
         # 9. Update Conversation
-        conversation.write({'last_activity': fields.Datetime.now()})
-
-        if len(conversation.message_ids) <= 2:
-            conversation.write({
-                'name': message[:30] + "..." if len(message) > 30 else message
-            })
+        self._update_conversation_metadata(conversation, message)
 
         if has_code:
             execution_result = self.execute_confirmed_code(action_code, conversation.id, schema_context=context_text)
@@ -158,212 +236,228 @@ class AskOdooModel(models.Model):
             'has_code': has_code,
         }
 
-    @api.model
-    def execute_confirmed_code(self, code, conversation_id, retry_depth=0, schema_context=None):
+    # ── Code Execution Pipeline ──────────────────────────────────────────────
+
+    def _execute_code_safely(self, code):
+        """Run code inside a savepoint via safe_eval.
+
+        The execution context exposes a read-only proxy for ``self.env``
+        so that LLM-generated code cannot accidentally (or maliciously)
+        call write/unlink/sudo.
+
+        Returns (result, chart_config) from the execution context.
+        Raises on any execution error.
         """
-        Executes the confirmed Python code safely and saves the result
-        back to the conversation history so the LLM can learn from
-        execution errors on the next user turn.
+        readonly_env = _ReadOnlyEnv(self.env)
+        local_context = {
+            'self': _ReadOnlySelf(self),
+            'env': readonly_env,
+            'result': None,
+            'chart_config': None,
+            'time': fields.Datetime.now,
+            'datetime': fields.Datetime,
+            'date': fields.Date,
+            'timedelta': timedelta,
+        }
+        with self.env.cr.savepoint():
+            safe_eval(code, local_context, mode="exec", nocopy=True)
+        return local_context.get('result'), local_context.get('chart_config')
+
+    @staticmethod
+    def _postprocess_result(result):
+        """Convert RecordSets, view objects, and generators to serialisable types."""
+        # RecordSet → list of display names
+        if result is not None and hasattr(result, '_name') and hasattr(result, 'mapped'):
+            if not result:
+                return "No records found."
+            try:
+                return result.mapped('display_name')
+            except (KeyError, AttributeError) as e:
+                _logger.debug("Could not map display_name: %s", e)
+                return str(result)
+
+        if result is None:
+            return result
+
+        # dict_keys / dict_values / sets → list
+        result_type = type(result).__name__
+        if result_type in ('dict_keys', 'dict_values', 'dict_items', 'set', 'frozenset'):
+            return list(result)
+
+        # Other non-string iterables → list
+        if hasattr(result, '__iter__') and not isinstance(result, (str, bytes, list, tuple)):
+            try:
+                return list(result)
+            except (TypeError, ValueError) as e:
+                _logger.debug("Could not convert iterable to list: %s", e)
+
+        return result
+
+    def _result_to_html(self, result, chart_config):
+        """Convert list/tuple results to an HTML table + optional chart data.
+
+        Returns (html_or_string, chart_data).
         """
+        chart_data = None
+        if not isinstance(result, (list, tuple)):
+            return (str(result) if result is not None else "Action Executed Successfully"), chart_data
+
         try:
-            from datetime import timedelta
-            local_context = {
-                'self': self,
-                'env': self.env,
-                'result': None,
-                'time': fields.Datetime.now,
-                'datetime': fields.Datetime,
-                'date': fields.Date,
-                'timedelta': timedelta,   # pre-inject so LLM code can use it without import
+            if not result:
+                return "No records found.", chart_data
+
+            # Cleanup Odoo-specific dictionary fields before Pandas conversion
+            if isinstance(result, list) and result and isinstance(result[0], dict):
+                clean_result = []
+                for row in result:
+                    clean_row = {}
+                    for k, v in row.items():
+                        if k == '__domain':
+                            continue
+                        # If value is a M2O tuple (id, name), extract the name
+                        if isinstance(v, (list, tuple)) and len(v) == 2 and isinstance(v[0], int) and isinstance(v[1], str):
+                            clean_row[k] = v[1]
+                        else:
+                            clean_row[k] = v
+                    clean_result.append(clean_row)
+                result = clean_result
+
+            df = pd.DataFrame(result)
+
+            # List-of-lists: promote first row to header if all-strings
+            if isinstance(result, list) and result and isinstance(result[0], list):
+                first_row = result[0]
+                if first_row and all(isinstance(x, str) for x in first_row):
+                    df = pd.DataFrame(result[1:], columns=first_row)
+
+            # Rename default "0" column for simple lists
+            if len(df.columns) == 1 and str(df.columns[0]) == '0':
+                df.columns = ['Result']
+
+            # Chart generation (only when explicitly requested)
+            if chart_config:
+                chart_data = self._generate_explicit_chart(df, chart_config)
+
+            html = df.to_html(index=False, border=0, classes='dataframe')
+            return html, chart_data
+
+        except Exception:
+            return str(result), chart_data
+
+    def _save_execution_to_history(self, conversation_id, result, chart_data):
+        """Persist a success message (with optional HTML and chart) to conversation history."""
+        if not conversation_id:
+            return
+        try:
+            preview = result if isinstance(result, str) else str(result)
+            history_content = (
+                f"✅ Code executed successfully.\n"
+                f"Result preview: {preview[:RESULT_PREVIEW_LENGTH]}"
+                f"{'...' if len(preview) > RESULT_PREVIEW_LENGTH else ''}"
+            )
+            is_html = isinstance(result, str) and (
+                result.strip().startswith('<table') or result.strip().startswith('<div')
+            )
+            msg_vals = {
+                'conversation_id': conversation_id,
+                'type': 'ai',
+                'content': history_content,
             }
-            # Use a savepoint so that if the generated code causes a DB error,
-            # the transaction rolls back to here instead of poisoning everything.
-            with self.env.cr.savepoint():
-                safe_eval(code, local_context, mode="exec", nocopy=True)
-            
-            result = local_context.get('result')
-            
-            
-            # Post-processing: If result is a RecordSet, make it readable
-            if result is not None and hasattr(result, '_name') and hasattr(result, 'mapped'):
-                # It's an Odoo RecordSet
-                if not result:
-                    result = "No records found."
-                else:
-                    try:
-                        # Prefer display_name or name
-                        result = result.mapped('display_name')
-                    except:
-                        result = str(result)
-            
-            # Convert dict_keys, dict_values, sets, and other iterables to lists for better formatting
-            if result is not None:
-                # Check for dict_keys, dict_values, or similar view objects
-                result_type = type(result).__name__
-                if result_type in ('dict_keys', 'dict_values', 'dict_items', 'set', 'frozenset'):
-                    result = list(result)
-                # Also handle generators and other iterables (but not strings!)
-                elif hasattr(result, '__iter__') and not isinstance(result, (str, bytes)):
-                    # Check if it's not already a list or tuple
-                    if not isinstance(result, (list, tuple)):
-                        try:
-                            result = list(result)
-                        except:
-                            pass  # Keep as-is if conversion fails
+            if is_html:
+                msg_vals['result_html'] = result
+            if chart_data:
+                msg_vals['chart_data_json'] = json.dumps(chart_data)
+            self.env['ask.odoo.message'].create(msg_vals)
+        except Exception as hist_e:
+            _logger.warning("AskOdoo: Could not save success result to history: %s", hist_e)
 
-            # Try to convert lists to HTML tables using Pandas
-            chart_data = None
-            if isinstance(result, (list, tuple)):
-                try:
-                    if not result:
-                        result = "No records found."
-                    else:
-                        df = pd.DataFrame(result)
+    def _save_error_to_history(self, conversation_id, content):
+        """Persist a hidden error/retry message to conversation history."""
+        if not conversation_id:
+            return
+        try:
+            self.env['ask.odoo.message'].create({
+                'conversation_id': conversation_id,
+                'type': 'ai',
+                'content': "[HIDDEN]" + content,
+            })
+        except Exception as hist_e:
+            _logger.warning("AskOdoo: Could not save error to history: %s", hist_e)
 
-                        # Check if result is a List of Lists (and not empty)
-                        # If the first row looks like headers (all strings), promote it
-                        if isinstance(result, list) and len(result) > 0 and isinstance(result[0], list):
-                            first_row = result[0]
-                            if first_row and all(isinstance(x, str) for x in first_row):
-                                # Treat first row as headers
-                                df = pd.DataFrame(result[1:], columns=first_row)
+    @api.model
+    def execute_confirmed_code(self, code, conversation_id, schema_context=None):
+        """Execute confirmed Python code with automated retry on failure.
 
-                        # Fix for simple lists becoming column "0" - rename to "Result" if single column
-                        if len(df.columns) == 1 and str(df.columns[0]) == '0':
-                            df.columns = ['Result']
+        On success: post-processes the result, converts to HTML, saves to
+        conversation history.  On failure: asks the LLM to fix the code and
+        retries up to MAX_EXECUTION_RETRIES times.
+        """
+        for attempt in range(MAX_EXECUTION_RETRIES):
+            try:
+                raw_result, chart_config = self._execute_code_safely(code)
+                result = self._postprocess_result(raw_result)
+                result, chart_data = self._result_to_html(result, chart_config)
 
-                        # ── Chart Data Detection ──────────────────────────────
-                        # Analyze the DataFrame to determine if it's chartable
-                        chart_data = self._detect_chart_data(df)
+                self._save_execution_to_history(conversation_id, result, chart_data)
 
-                        # border=0 to let CSS handle it
-                        # classes='dataframe' to ensure our CSS target hits it
-                        result = df.to_html(index=False, border=0, classes='dataframe')
-                except Exception:
-                    # Fallback to string representation if conversion fails
-                    result = str(result)
-            else:
-                result = str(result) if result is not None else "Action Executed Successfully"
-
-            execution_result = {
-                'status': 'success',
-                'result': result,
-                'chart_data': chart_data,
-            }
-
-            # ── Save success back to conversation history ─────────────────
-            if conversation_id:
-                try:
-                    preview = result if isinstance(result, str) else str(result)
-                    history_content = (
-                        f"✅ Code executed successfully.\n"
-                        f"Result preview: {preview[:300]}{'...' if len(preview) > 300 else ''}"
-                    )
-                    # Determine if result is HTML
-                    is_html = isinstance(result, str) and (
-                        result.strip().startswith('<table') or result.strip().startswith('<div')
-                    )
-                    msg_vals = {
-                        'conversation_id': conversation_id,
-                        'type': 'ai',
-                        'content': history_content,
-                    }
-                    if is_html:
-                        msg_vals['result_html'] = result
-                    if chart_data:
-                        msg_vals['chart_data_json'] = json.dumps(chart_data)
-                    self.env['ask.odoo.message'].create(msg_vals)
-                except Exception as hist_e:
-                    _logger.warning(f"AskOdoo: Could not save success result to history: {hist_e}")
-
-            return execution_result
-
-        except Exception as e:
-            _logger.exception("Execution Error")
-
-            # ── Guard 1: Retry Depth ───────────────────────────
-            MAX_AUTO_RETRIES = 3
-            if retry_depth >= MAX_AUTO_RETRIES:
-                _logger.warning("AskOdoo: Max auto-retries reached. Bailing out.")
-                bail_message = (
-                    "**❌ Unable to automatically retrieve data.**\n\n"
-                    "I tried fixing the query multiple times but could not find the correct fields. "
-                    "Please try rephrasing your question or providing more details."
-                )
-                if conversation_id:
-                    self.env['ask.odoo.message'].create({
-                        'conversation_id': conversation_id,
-                        'type': 'ai',
-                        'content': "[HIDDEN]" + bail_message,
-                    })
                 return {
-                    'status': 'error',
-                    'message': bail_message,
-                    'debug_message': str(e),
-                    'retry_code': None,
+                    'status': 'success',
+                    'result': result,
+                    'chart_data': chart_data,
                 }
 
-            # Generate structured error response (now with history awareness and schema context)
-            friendly_error = self._explain_error_to_user(code, str(e), conversation_id, schema_context)
+            except Exception as e:
+                _logger.exception("Execution Error")
 
-            # Extract the corrected code block from the LLM's structured response
-            retry_code = None
-            code_match = re.search(r"```python\n(.*?)\n```", friendly_error, re.DOTALL)
-            if code_match:
-                retry_code = code_match.group(1).strip()
-
-            # ── Guard 2: Duplicate detection ──────────────────────────────
-            # If proposed fix is identical to the code that just failed, reject it.
-            if retry_code and retry_code.strip() == code.strip():
-                _logger.warning("AskOdoo: Proposed fix is identical to failed code. Rejecting.")
-                retry_code = None
-                friendly_error = (
-                    f"**❌ Error:** {str(e)}\n\n"
-                    "I was unable to generate a different fix. "
-                    "Please try rephrasing your question or providing more details."
+                friendly_error = self._explain_error_to_user(
+                    code, str(e), conversation_id, schema_context,
                 )
+                _, retry_code = self._extract_code_block(friendly_error)
 
-            # Auto-execute retry code if valid
-            if retry_code:
-                if conversation_id:
-                    try:
-                        history_content = (
-                            f"❌ Execution Error:\n```python\n{code}\n```\nError: {str(e)}\n"
-                            f"Proposed fix code:\n```python\n{retry_code}\n```"
-                        )
-                        self.env['ask.odoo.message'].create({
-                            'conversation_id': conversation_id,
-                            'type': 'ai',
-                            'content': "[HIDDEN]" + history_content,
-                        })
-                    except Exception as hist_e:
-                        _logger.warning(f"AskOdoo: Could not save error to history: {hist_e}")
-                
-                _logger.info(f"AskOdoo: Auto-retrying fixed code. Depth: {retry_depth + 1}")
-                return self.execute_confirmed_code(retry_code, conversation_id, retry_depth=retry_depth + 1, schema_context=schema_context)
+                # Reject identical fixes
+                if retry_code and retry_code.strip() == code.strip():
+                    _logger.warning("AskOdoo: Proposed fix is identical to failed code. Rejecting.")
+                    retry_code = None
+                    friendly_error = (
+                        f"**❌ Error:** {str(e)}\n\n"
+                        "I was unable to generate a different fix. "
+                        "Please try rephrasing your question or providing more details."
+                    )
 
-            # If no retry code was found, save final error and return
-            if conversation_id:
-                try:
-                    history_content = (
+                if retry_code:
+                    self._save_error_to_history(conversation_id, (
+                        f"❌ Execution Error:\n```python\n{code}\n```\nError: {str(e)}\n"
+                        f"Proposed fix code:\n```python\n{retry_code}\n```"
+                    ))
+                    _logger.info("AskOdoo: Auto-retrying fixed code. Depth: %d", attempt + 1)
+                    code = retry_code
+                else:
+                    self._save_error_to_history(conversation_id, (
                         f"❌ Execution Error for the previously proposed code:\n"
                         f"Code attempted:\n```python\n{code}\n```\n"
                         f"Error: {str(e)}\n"
-                    )
-                    self.env['ask.odoo.message'].create({
-                        'conversation_id': conversation_id,
-                        'type': 'ai',
-                        'content': "[HIDDEN]" + history_content,
-                    })
-                except Exception as hist_e:
-                    _logger.warning(f"AskOdoo: Could not save error to history: {hist_e}")
+                    ))
+                    return {
+                        'status': 'error',
+                        'message': friendly_error,
+                        'debug_message': str(e),
+                        'retry_code': None,
+                    }
 
-            return {
-                'status': 'error',
-                'message': friendly_error,
-                'debug_message': str(e),
-                'retry_code': None,
-            }
+        # Guard: Max retries reached
+        _logger.warning("AskOdoo: Max auto-retries reached. Bailing out.")
+        bail_message = (
+            "**❌ Unable to automatically retrieve data.**\n\n"
+            "I tried fixing the query multiple times but could not find the correct fields. "
+            "Please try rephrasing your question or providing more details."
+        )
+        self._save_error_to_history(conversation_id, bail_message)
+        return {
+            'status': 'error',
+            'message': bail_message,
+            'debug_message': "Max retries reached without success.",
+            'retry_code': None,
+        }
 
     @api.model
     def _explain_error_to_user(self, code, error_message, conversation_id=None, schema_context=None):

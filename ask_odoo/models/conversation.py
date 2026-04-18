@@ -5,8 +5,44 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 _logger = logging.getLogger(__name__)
 
+# ── Constants ────────────────────────────────────────────────────────────────
+HISTORY_WINDOW = 10             # Max number of past messages sent to the LLM
+CONVERSATION_TITLE_LENGTH = 30  # Truncation length for auto-generated titles
+
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
+
+    # ── Shared Conversation Helpers ──────────────────────────────────────────
+
+    def _ensure_conversation(self, message, conversation_id=None, default_name='New Chat'):
+        """Get or create a conversation and save the user's message.
+
+        Returns (conversation_record, user_message_record).
+        Used by both db_mode and rag_mode to avoid duplicating the same
+        setup logic.
+        """
+        if conversation_id:
+            conversation = self.env['ask.odoo.conversation'].browse(conversation_id)
+        else:
+            conversation = self.env['ask.odoo.conversation'].create({
+                'name': default_name,
+                'user_id': self.env.user.id,
+            })
+
+        user_msg = self.env['ask.odoo.message'].create({
+            'conversation_id': conversation.id,
+            'type': 'user',
+            'content': message,
+        })
+        return conversation, user_msg
+
+    def _update_conversation_metadata(self, conversation, message):
+        """Update last_activity and auto-generate a title for new conversations."""
+        conversation.write({'last_activity': fields.Datetime.now()})
+        if len(conversation.message_ids) <= 2:
+            title = (message[:CONVERSATION_TITLE_LENGTH] + "..."
+                     if len(message) > CONVERSATION_TITLE_LENGTH else message)
+            conversation.write({'name': title})
 
     def _get_history(self, conversation_id, exclude_id=None):
         """Fetch history and convert to LangChain Messages."""
@@ -18,7 +54,7 @@ class AskOdooModel(models.Model):
         messages = self.env['ask.odoo.message'].search(
             domain,
             order='id desc',
-            limit=10
+            limit=HISTORY_WINDOW,
         )
         
         # Sort by ID ascending explicitly to ensure chronological order [Oldest -> Newest]
@@ -34,7 +70,7 @@ class AskOdooModel(models.Model):
                     content = content[8:]
                 history.append(AIMessage(content=content))
                 
-        _logger.info(f"Retrieved {len(history)} messages for history. IDs: {history_records.ids}")
+        _logger.info("Retrieved %d messages for history. IDs: %s", len(history), history_records.ids)
         return history
 
     @api.model

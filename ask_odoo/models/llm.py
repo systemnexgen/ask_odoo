@@ -1,5 +1,5 @@
 from odoo import models
-from odoo.tools import config
+from .utils import get_pg_connection_string
 import os
 from dotenv import load_dotenv
 from langchain_postgres.vectorstores import PGVector
@@ -8,51 +8,66 @@ from langchain_huggingface import HuggingFaceEmbeddings
 
 load_dotenv()
 
+import threading
+
+_LOCK = threading.RLock()
+_embeddings_instance = None
+_vector_store_instance = None
+_schema_vector_store_instance = None
+_llm_instance = None
+
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
 
     def _get_connection_string(self):
-        db_name = self.env.cr.dbname
-        user = config.get('db_user')
-        password = config.get('db_password')
-        host = config.get('db_host') or 'localhost'
-        port = config.get('db_port') or 5432
-        return f"postgresql+psycopg2://{user}:{password}@{host}:{port}/{db_name}"
+        return get_pg_connection_string(self.env)
 
     def _get_llm(self):
-        # Groq Implementation
-        GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-        # print(f"Groq API Key: {GROQ_API_KEY}")
-        return ChatGroq(
-            model="llama-3.1-8b-instant",
-            # model="openai/gpt-oss-120b",
-            groq_api_key=GROQ_API_KEY,
-            temperature=0
-        )
+        """Returns the shared ChatGroq LLM client (singleton)."""
+        global _llm_instance
+        if _llm_instance is None:
+            with _LOCK:
+                if _llm_instance is None:
+                    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+                    # print(f"Groq API Key: {GROQ_API_KEY}")
+                    _llm_instance = ChatGroq(
+                        # model="llama-3.1-8b-instant",
+                        model="openai/gpt-oss-120b",
+                        # model = "llama-3.3-70b-versatile",
+                        groq_api_key=GROQ_API_KEY,
+                        temperature=0
+                    )
+        return _llm_instance
 
     def _get_embeddings(self):
         """Returns the shared HuggingFace embeddings model."""
-        if not type(self)._embeddings:
-            type(self)._embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        return type(self)._embeddings
+        global _embeddings_instance
+        if _embeddings_instance is None:
+            with _LOCK:
+                if _embeddings_instance is None:
+                    _embeddings_instance = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        return _embeddings_instance
 
     def _get_retriever(self):
-        if not type(self)._vector_store:
-            # Initialize Embeddings
-            self._get_embeddings()
-            
-            # Initialize PGVector
-            # Note: PGVector expects specific extension and tables. 
-            # We use the standard LangChain implementation.
-            connection = self._get_connection_string()
-            type(self)._vector_store = PGVector(
-                embeddings=type(self)._embeddings,
-                collection_name="ask_odoo_knowledge_chunk",
-                connection=connection,
-                use_jsonb=True,
-            )
+        global _vector_store_instance
+        if _vector_store_instance is None:
+            with _LOCK:
+                if _vector_store_instance is None:
+                    # Initialize Embeddings
+                    emb = self._get_embeddings()
+                    
+                    # Initialize PGVector
+                    # Note: PGVector expects specific extension and tables. 
+                    # We use the standard LangChain implementation.
+                    connection = self._get_connection_string()
+                    _vector_store_instance = PGVector(
+                        embeddings=emb,
+                        collection_name="ask_odoo_knowledge_chunk",
+                        connection=connection,
+                        use_jsonb=True,
+                    )
         
-        return type(self)._vector_store.as_retriever(
+        return _vector_store_instance.as_retriever(
             search_type="similarity",
             search_kwargs={"k": 3}
         )
@@ -62,19 +77,22 @@ class AskOdooModel(models.Model):
         Returns the PGVector store specifically for Database Schema.
         Uses a separate collection 'ask_odoo_schema'.
         """
-        if not type(self)._schema_vector_store:
-            # Ensure Embeddings are ready
-            self._get_embeddings()
+        global _schema_vector_store_instance
+        if _schema_vector_store_instance is None:
+            with _LOCK:
+                if _schema_vector_store_instance is None:
+                    # Ensure Embeddings are ready
+                    emb = self._get_embeddings()
 
-            connection = self._get_connection_string()
-            
-            type(self)._schema_vector_store = PGVector(
-                embeddings=type(self)._embeddings,
-                collection_name="ask_odoo_schema",
-                connection=connection,
-                use_jsonb=True,
-            )
-        return type(self)._schema_vector_store
+                    connection = self._get_connection_string()
+                    
+                    _schema_vector_store_instance = PGVector(
+                        embeddings=emb,
+                        collection_name="ask_odoo_schema",
+                        connection=connection,
+                        use_jsonb=True,
+                    )
+        return _schema_vector_store_instance
 
     def _get_schema_retriever(self):
         """
@@ -85,7 +103,7 @@ class AskOdooModel(models.Model):
         vector_store = self._get_schema_vector_store()
         return vector_store.as_retriever(
             search_type="similarity",
-            search_kwargs={"k": 3}
+            search_kwargs={"k": 15}
         )
 
 
