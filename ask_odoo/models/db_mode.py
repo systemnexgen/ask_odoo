@@ -351,8 +351,7 @@ class AskOdooModel(models.Model):
         try:
             preview = result if isinstance(result, str) else str(result)
             history_content = (
-                f"✅ Code executed successfully.\n"
-                f"Result preview: {preview[:RESULT_PREVIEW_LENGTH]}"
+                f" {preview[:RESULT_PREVIEW_LENGTH]}"
                 f"{'...' if len(preview) > RESULT_PREVIEW_LENGTH else ''}"
             )
             is_html = isinstance(result, str) and (
