@@ -52,7 +52,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all sale orders created today.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['sale.order'].search_read(\n"
             "    [('create_date', '>=', today)],\n"
@@ -82,7 +81,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total confirmed sales revenue this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['sale.order'].read_group(\n"
@@ -94,7 +92,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total confirmed sales revenue this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['sale.order'].read_group(\n"
             "    [('state', 'in', ['sale', 'done']), ('date_order', '>=', f'{year}-01-01')],\n"
@@ -105,7 +102,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all sale orders that are overdue and still in draft or sent state.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['sale.order'].search_read(\n"
             "    [('state', 'in', ['draft', 'sent']), ('validity_date', '<', today)],\n"
@@ -128,7 +124,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show monthly sales totals for the current year grouped by month.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['sale.order'].read_group(\n"
             "    [('state', 'in', ['sale', 'done']),\n"
@@ -166,7 +161,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all sale orders that have been cancelled this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['sale.order'].search_read(\n"
             "    [('state', '=', 'cancel'), ('date_order', '>=', f'{year}-01-01')],\n"
@@ -187,7 +181,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total discount given on confirmed sale orders this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "lines = self.env['sale.order.line'].search(\n"
             "    [('order_id.state', 'in', ['sale', 'done']),\n"
@@ -204,7 +197,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show quarterly sales totals for the current year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['sale.order'].read_group(\n"
             "    [('state', 'in', ['sale', 'done']),\n"
@@ -218,7 +210,7 @@ FEW_SHOT_EXAMPLES = [
         "question": "Which sale orders have a delivery status of 'Nothing to send'?",
         "code": (
             "result = self.env['sale.order'].search_read(\n"
-            "    [('delivery_status', '=', 'no'), ('state', 'in', ['sale', 'done'])],\n"
+            "    [('delivery_status', '=', False), ('state', 'in', ['sale', 'done'])],\n"
             "    ['name', 'partner_id', 'amount_total', 'delivery_status']\n"
             ")"
         )
@@ -226,7 +218,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List the top 5 sales representatives by total confirmed revenue this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['sale.order'].read_group(\n"
             "    [('state', 'in', ['sale', 'done']), ('date_order', '>=', f'{year}-01-01')],\n"
@@ -268,12 +259,10 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total value of sale orders placed last month?",
         "code": (
-            "from datetime import date\n"
-            "from dateutil.relativedelta import relativedelta\n"
             "today = date.today()\n"
             "first_this_month = today.replace(day=1)\n"
-            "first_last_month = (first_this_month - relativedelta(months=1)).strftime('%Y-%m-%d')\n"
-            "last_last_month = (first_this_month - relativedelta(days=1)).strftime('%Y-%m-%d')\n"
+            "last_last_month = (first_this_month - timedelta(days=1)).strftime('%Y-%m-%d')\n"
+            "first_last_month = (first_this_month - timedelta(days=1)).replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['sale.order'].read_group(\n"
             "    [('state', 'in', ['sale', 'done']),\n"
             "     ('date_order', '>=', first_last_month),\n"
@@ -290,7 +279,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total revenue from posted customer invoices this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['account.move'].read_group(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -302,7 +290,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all overdue customer invoices with the amount still owed.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['account.move'].search_read(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -328,7 +315,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all vendor bills that are due in the next 7 days and are unpaid.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today()\n"
             "week_later = (today + timedelta(days=7)).strftime('%Y-%m-%d')\n"
             "today_str = today.strftime('%Y-%m-%d')\n"
@@ -344,7 +330,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total amount of credit notes issued this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['account.move'].read_group(\n"
@@ -376,7 +361,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total tax collected on customer invoices this quarter?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "quarter_start = date(today.year, ((today.month - 1) // 3) * 3 + 1, 1).strftime('%Y-%m-%d')\n"
             "result = self.env['account.move.line'].read_group(\n"
@@ -400,7 +384,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show monthly revenue from customer invoices for the current year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['account.move'].read_group(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -413,7 +396,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total amount paid by customers this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['account.payment'].read_group(\n"
@@ -426,7 +408,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all customer invoices that were fully paid in the last 30 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')\n"
             "result = self.env['account.move'].search_read(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -439,7 +420,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total vendor bills received per vendor this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['account.move'].read_group(\n"
             "    [('move_type', '=', 'in_invoice'), ('state', '=', 'posted'),\n"
@@ -463,7 +443,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the ageing of overdue receivables bucketed by 0-30, 31-60, 61-90, and 90+ days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today()\n"
             "overdue = self.env['account.move'].search(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -483,7 +462,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all payments made to vendors in the last 7 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=7)).strftime('%Y-%m-%d')\n"
             "result = self.env['account.payment'].search_read(\n"
             "    [('payment_type', '=', 'outbound'), ('state', '=', 'posted'),\n"
@@ -507,7 +485,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show all journal entries posted in the last 30 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')\n"
             "result = self.env['account.move'].search_read(\n"
             "    [('move_type', '=', 'entry'), ('state', '=', 'posted'),\n"
@@ -519,7 +496,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total expense recorded in the Expenses journal this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "journal = self.env['account.journal'].search([('type', '=', 'purchase'), ('name', 'ilike', 'expense')], limit=1)\n"
@@ -533,7 +509,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many invoices were issued per month this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['account.move'].read_group(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -546,7 +521,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the average invoice value for confirmed customer invoices this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['account.move'].read_group(\n"
             "    [('move_type', '=', 'out_invoice'), ('state', '=', 'posted'),\n"
@@ -572,7 +546,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all deliveries that were completed today.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['stock.picking'].search_read(\n"
             "    [('picking_type_code', '=', 'outgoing'), ('state', '=', 'done'),\n"
@@ -603,7 +576,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which delivery orders are overdue and have not been shipped yet?",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['stock.picking'].search_read(\n"
             "    [('picking_type_code', '=', 'outgoing'),\n"
@@ -616,11 +588,10 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total quantity received per product this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['stock.move'].read_group(\n"
-            "    [('picking_type_code', '=', 'incoming'), ('state', '=', 'done'),\n"
+            "    [('picking_id.picking_type_code', '=', 'incoming'), ('state', '=', 'done'),\n"
             "     ('date', '>=', first_day)],\n"
             "    ['product_id', 'quantity:sum'],\n"
             "    ['product_id']\n"
@@ -652,7 +623,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many receipts (incoming shipments) have been validated this week?",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['stock.picking'].search_count(\n"
             "    [('picking_type_code', '=', 'incoming'), ('state', '=', 'done'),\n"
@@ -663,13 +633,12 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which products have had no stock movements in the last 90 days (slow movers)?",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=90)).strftime('%Y-%m-%d')\n"
             "moved_product_ids = self.env['stock.move'].search(\n"
             "    [('state', '=', 'done'), ('date', '>=', cutoff)]\n"
             ").mapped('product_id.id')\n"
             "result = self.env['product.product'].search_read(\n"
-            "    [('id', 'not in', moved_product_ids), ('type', '=', 'product')],\n"
+            "    [('id', 'not in', moved_product_ids), ('type', '=', 'consu')],\n"
             "    ['name', 'default_code', 'categ_id']\n"
             ")"
         )
@@ -679,7 +648,7 @@ FEW_SHOT_EXAMPLES = [
         "code": (
             "result = self.env['stock.picking'].search_read(\n"
             "    [('picking_type_code', '=', 'internal'),\n"
-            "     ('state', 'in', ['confirmed', 'assigned', 'partially_available'])],\n"
+            "     ('state', 'in', ['confirmed', 'assigned', 'waiting'])],\n"
             "    ['name', 'location_id', 'location_dest_id', 'scheduled_date', 'state']\n"
             ")"
         )
@@ -687,10 +656,9 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total quantity shipped out per product this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['stock.move'].read_group(\n"
-            "    [('picking_type_code', '=', 'outgoing'), ('state', '=', 'done'),\n"
+            "    [('picking_id.picking_type_code', '=', 'outgoing'), ('state', '=', 'done'),\n"
             "     ('date', '>=', f'{year}-01-01')],\n"
             "    ['product_id', 'quantity:sum'],\n"
             "    ['product_id'],\n"
@@ -701,7 +669,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all stock pickings that were cancelled this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['stock.picking'].search_read(\n"
@@ -713,7 +680,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show all lots/serial numbers that are about to expire in the next 30 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "in_30 = (date.today() + timedelta(days=30)).strftime('%Y-%m-%d')\n"
             "result = self.env['stock.lot'].search_read(\n"
@@ -729,7 +695,7 @@ FEW_SHOT_EXAMPLES = [
             "    [('location_id.usage', '=', 'internal'), ('quantity', '>', 0)]\n"
             ").mapped('product_id.id')\n"
             "result = self.env['product.product'].search_count(\n"
-            "    [('type', '=', 'product'), ('id', 'not in', products_with_stock)]\n"
+            "    [('type', '=', 'consu'), ('id', 'not in', products_with_stock)]\n"
             ")"
         )
     },
@@ -760,7 +726,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total number of stock moves done this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['stock.move'].search_count(\n"
@@ -796,7 +761,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total amount spent on purchases per vendor this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['purchase.order'].read_group(\n"
             "    [('state', 'in', ['purchase', 'done']), ('date_order', '>=', f'{year}-01-01')],\n"
@@ -818,7 +782,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which are the top 10 most purchased products by quantity this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['purchase.order.line'].read_group(\n"
             "    [('order_id.state', 'in', ['purchase', 'done']),\n"
@@ -833,7 +796,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show all draft purchase orders waiting for more than 3 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=3)).strftime('%Y-%m-%d')\n"
             "result = self.env['purchase.order'].search_read(\n"
             "    [('state', '=', 'draft'), ('create_date', '<=', cutoff)],\n"
@@ -860,7 +822,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total purchase spending grouped by product category this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['purchase.order.line'].read_group(\n"
             "    [('order_id.state', 'in', ['purchase', 'done']),\n"
@@ -881,7 +842,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all purchase orders placed this week.",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['purchase.order'].search_read(\n"
             "    [('create_date', '>=', monday)],\n"
@@ -892,7 +852,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show purchase orders with a delivery date overdue and not yet received.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['purchase.order'].search_read(\n"
             "    [('state', 'in', ['purchase']), ('date_planned', '<', today),\n"
@@ -904,7 +863,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total value of all purchase orders placed this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['purchase.order'].read_group(\n"
@@ -916,7 +874,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which vendors have the highest number of purchase orders this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['purchase.order'].read_group(\n"
             "    [('date_order', '>=', f'{year}-01-01')],\n"
@@ -930,12 +887,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all purchase order lines where the received quantity is less than ordered.",
         "code": (
-            "result = self.env['purchase.order.line'].search_read(\n"
-            "    [('order_id.state', 'in', ['purchase', 'done']),\n"
-            "     ('qty_received', '<', 'product_qty')],\n"
-            "    ['order_id', 'product_id', 'product_qty', 'qty_received']\n"
-            ")\n"
-            "# alternative using python filter:\n"
             "lines = self.env['purchase.order.line'].search(\n"
             "    [('order_id.state', 'in', ['purchase', 'done'])]\n"
             ")\n"
@@ -969,7 +920,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the monthly purchase spend trend for the current year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['purchase.order'].read_group(\n"
             "    [('state', 'in', ['purchase', 'done']), ('date_order', '>=', f'{year}-01-01')],\n"
@@ -1015,7 +965,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all opportunities with no activity in the last 14 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=14)).strftime('%Y-%m-%d')\n"
             "result = self.env['crm.lead'].search_read(\n"
             "    [('type', '=', 'opportunity'), ('active', '=', True),\n"
@@ -1028,13 +977,12 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the win rate percentage this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "won = self.env['crm.lead'].search_count(\n"
             "    [('type', '=', 'opportunity'), ('stage_id.is_won', '=', True),\n"
             "     ('date_closed', '>=', f'{year}-01-01')]\n"
             ")\n"
-            "lost = self.env['crm.lead'].search_count(\n"
+            "lost = self.env['crm.lead'].with_context(active_test=False).search_count(\n"
             "    [('type', '=', 'opportunity'), ('active', '=', False),\n"
             "     ('probability', '=', 0), ('date_closed', '>=', f'{year}-01-01')]\n"
             ")\n"
@@ -1056,7 +1004,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which leads were created this week and not yet assigned to a salesperson?",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['crm.lead'].search_read(\n"
             "    [('type', '=', 'lead'), ('create_date', '>=', monday), ('user_id', '=', False)],\n"
@@ -1076,18 +1023,17 @@ FEW_SHOT_EXAMPLES = [
             "    days = (opp.date_closed - opp.create_date).days\n"
             "    key = opp.team_id.name or 'No Team'\n"
             "    team_data.setdefault(key, []).append(days)\n"
-            "result = [{'team': t, 'avg_days_to close': round(sum(d)/len(d), 1)} for t, d in team_data.items()]"
+            "result = [{'team': t, 'avg_days_to_close': round(sum(d)/len(d), 1)} for t, d in team_data.items()]"
         )
     },
     {
         "question": "How many new leads were created this month vs last month?",
         "code": (
-            "from datetime import date\n"
-            "from dateutil.relativedelta import relativedelta\n"
             "today = date.today()\n"
-            "this_month_start = today.replace(day=1).strftime('%Y-%m-%d')\n"
-            "last_month_start = (today.replace(day=1) - relativedelta(months=1)).strftime('%Y-%m-%d')\n"
-            "last_month_end = (today.replace(day=1) - relativedelta(days=1)).strftime('%Y-%m-%d')\n"
+            "first_this_month = today.replace(day=1)\n"
+            "this_month_start = first_this_month.strftime('%Y-%m-%d')\n"
+            "last_month_end = (first_this_month - timedelta(days=1)).strftime('%Y-%m-%d')\n"
+            "last_month_start = (first_this_month - timedelta(days=1)).replace(day=1).strftime('%Y-%m-%d')\n"
             "this_month = self.env['crm.lead'].search_count(\n"
             "    [('type', '=', 'lead'), ('create_date', '>=', this_month_start)]\n"
             ")\n"
@@ -1111,7 +1057,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show leads grouped by source (campaign/medium) this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['crm.lead'].read_group(\n"
             "    [('type', '=', 'lead'), ('create_date', '>=', f'{year}-01-01')],\n"
@@ -1124,11 +1069,9 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total expected revenue of opportunities closing this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
-            "import calendar\n"
-            "last_day = today.replace(day=calendar.monthrange(today.year, today.month)[1]).strftime('%Y-%m-%d')\n"
+            "last_day = today.replace(day=((today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day).strftime('%Y-%m-%d')\n"
             "result = self.env['crm.lead'].read_group(\n"
             "    [('type', '=', 'opportunity'), ('active', '=', True),\n"
             "     ('date_deadline', '>=', first_day), ('date_deadline', '<=', last_day)],\n"
@@ -1162,7 +1105,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show all opportunities that have a deadline within the next 7 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "in_7 = (date.today() + timedelta(days=7)).strftime('%Y-%m-%d')\n"
             "result = self.env['crm.lead'].search_read(\n"
@@ -1205,7 +1147,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many employees joined the company this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['hr.employee'].search_count(\n"
             "    [('active', '=', True), ('create_date', '>=', f'{year}-01-01')]\n"
@@ -1215,7 +1156,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all employees whose contract is expiring in the next 30 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "in_30 = (date.today() + timedelta(days=30)).strftime('%Y-%m-%d')\n"
             "result = self.env['hr.contract'].search_read(\n"
@@ -1237,7 +1177,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many leave days were taken by department this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['hr.leave'].read_group(\n"
@@ -1250,7 +1189,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all employees on leave today.",
         "code": (
-            "from datetime import datetime\n"
             "now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')\n"
             "today = datetime.now().strftime('%Y-%m-%d')\n"
             "result = self.env['hr.leave'].search_read(\n"
@@ -1264,7 +1202,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total payroll cost this month across all employees?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "result = self.env['hr.payslip'].read_group(\n"
             "    [('state', '=', 'done'),\n"
@@ -1292,7 +1229,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many employees have not taken any leave this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "employees_with_leave = self.env['hr.leave'].search(\n"
             "    [('state', '=', 'validate'), ('date_from', '>=', f'{year}-01-01')]\n"
@@ -1305,7 +1241,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total overtime hours logged per employee this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['hr.attendance'].read_group(\n"
@@ -1319,7 +1254,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List employees who are late (check-in after 9 AM) most frequently this week.",
         "code": (
-            "from datetime import date, timedelta, datetime\n"
             "monday = date.today() - timedelta(days=date.today().weekday())\n"
             "monday_str = monday.strftime('%Y-%m-%d')\n"
             "attendances = self.env['hr.attendance'].search(\n"
@@ -1355,7 +1289,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total number of leave requests approved vs refused this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['hr.leave'].read_group(\n"
             "    [('date_from', '>=', f'{year}-01-01'), ('state', 'in', ['validate', 'refuse'])],\n"
@@ -1367,7 +1300,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show employees whose birthday is this month.",
         "code": (
-            "from datetime import date\n"
             "month = date.today().month\n"
             "employees = self.env['hr.employee'].search([('active', '=', True), ('birthday', '!=', False)])\n"
             "result = [\n"
@@ -1379,7 +1311,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all employees who have been with the company for more than 5 years.",
         "code": (
-            "from datetime import date\n"
             "cutoff = date(date.today().year - 5, date.today().month, date.today().day).strftime('%Y-%m-%d')\n"
             "result = self.env['hr.employee'].search_read(\n"
             "    [('active', '=', True), ('create_date', '<=', cutoff)],\n"
@@ -1403,7 +1334,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all manufacturing orders that are overdue and not yet finished.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].search_read(\n"
             "    [('state', 'not in', ['done', 'cancel']),\n"
@@ -1415,7 +1345,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total quantity produced per product this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].read_group(\n"
@@ -1431,7 +1360,7 @@ FEW_SHOT_EXAMPLES = [
             "result = self.env['mrp.production'].search_read(\n"
             "    [('state', 'in', ['confirmed', 'progress']),\n"
             "     ('reservation_state', 'not in', ['assigned'])],\n"
-            "    ['name', 'product_id', 'product_qty', 'reservation_state', 'date_planned_start']\n"
+            "    ['name', 'product_id', 'product_qty', 'reservation_state', 'date_start']\n"
             ")"
         )
     },
@@ -1448,7 +1377,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many manufacturing orders were completed this week?",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].search_count(\n"
             "    [('state', '=', 'done'), ('date_finished', '>=', monday)]\n"
@@ -1458,7 +1386,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total manufacturing scrap quantity per product this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['stock.scrap'].read_group(\n"
             "    [('production_id', '!=', False), ('state', '=', 'done'),\n"
@@ -1472,7 +1399,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the efficiency rate of manufacturing orders this month (qty produced vs qty planned)?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "orders = self.env['mrp.production'].search(\n"
@@ -1492,21 +1418,20 @@ FEW_SHOT_EXAMPLES = [
         "code": (
             "result = self.env['mrp.workorder'].search_read(\n"
             "    [('state', '=', 'ready')],\n"
-            "    ['name', 'production_id', 'workcenter_id', 'date_planned_start', 'duration_expected']\n"
+            "    ['name', 'production_id', 'workcenter_id', 'date_start', 'duration_expected']\n"
             ")"
         )
     },
     {
         "question": "Show the total planned manufacturing quantity per product for next week.",
         "code": (
-            "from datetime import date, timedelta\n"
             "today = date.today()\n"
             "next_monday = (today + timedelta(days=(7 - today.weekday()))).strftime('%Y-%m-%d')\n"
             "next_sunday = (today + timedelta(days=(13 - today.weekday()))).strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].read_group(\n"
             "    [('state', 'not in', ['done', 'cancel']),\n"
-            "     ('date_planned_start', '>=', next_monday),\n"
-            "     ('date_planned_start', '<=', next_sunday)],\n"
+            "     ('date_start', '>=', next_monday),\n"
+            "     ('date_start', '<=', next_sunday)],\n"
             "    ['product_id', 'product_qty:sum'],\n"
             "    ['product_id']\n"
             ")"
@@ -1525,10 +1450,9 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which workcenter has the most work orders this week?",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.workorder'].read_group(\n"
-            "    [('date_planned_start', '>=', monday)],\n"
+            "    [('date_start', '>=', monday)],\n"
             "    ['workcenter_id', 'id:count'],\n"
             "    ['workcenter_id'],\n"
             "    orderby='workcenter_id_count DESC',\n"
@@ -1539,32 +1463,29 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all manufacturing orders planned for today.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].search_read(\n"
             "    [('state', 'not in', ['done', 'cancel']),\n"
-            "     ('date_planned_start', '>=', today)],\n"
-            "    ['name', 'product_id', 'product_qty', 'date_planned_start', 'state']\n"
+            "     ('date_start', '>=', today)],\n"
+            "    ['name', 'product_id', 'product_qty', 'date_start', 'state']\n"
             ")"
         )
     },
     {
         "question": "What is the average time to complete a manufacturing order in days this year?",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "orders = self.env['mrp.production'].search(\n"
-            "    [('state', '=', 'done'), ('date_planned_start', '!=', False),\n"
+            "    [('state', '=', 'done'), ('date_start', '!=', False),\n"
             "     ('date_finished', '!=', False), ('date_finished', '>=', f'{year}-01-01')]\n"
             ")\n"
-            "durations = [(o.date_finished - o.date_planned_start).days for o in orders if o.date_finished > o.date_planned_start]\n"
+            "durations = [(o.date_finished - o.date_start).days for o in orders if o.date_finished > o.date_start]\n"
             "result = {'avg_days': round(sum(durations) / len(durations), 1) if durations else 0, 'sample_size': len(durations)}"
         )
     },
     {
         "question": "List all manufacturing orders cancelled this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['mrp.production'].search_read(\n"
@@ -1589,7 +1510,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all tasks assigned to me that are overdue.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "uid = self.env.uid\n"
             "result = self.env['project.task'].search_read(\n"
@@ -1620,7 +1540,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which project has the most overdue tasks?",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['project.task'].read_group(\n"
             "    [('date_deadline', '<', today), ('stage_id.fold', '=', False), ('active', '=', True)],\n"
@@ -1634,7 +1553,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all tasks created this week with no assignee.",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['project.task'].search_read(\n"
             "    [('create_date', '>=', monday), ('user_ids', '=', False), ('active', '=', True)],\n"
@@ -1655,7 +1573,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show tasks completed this month grouped by project.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['project.task'].read_group(\n"
@@ -1668,11 +1585,9 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all projects that have a deadline this month.",
         "code": (
-            "from datetime import date\n"
-            "import calendar\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
-            "last_day = today.replace(day=calendar.monthrange(today.year, today.month)[1]).strftime('%Y-%m-%d')\n"
+            "last_day = today.replace(day=((today.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)).day).strftime('%Y-%m-%d')\n"
             "result = self.env['project.project'].search_read(\n"
             "    [('date', '>=', first_day), ('date', '<=', last_day)],\n"
             "    ['name', 'date', 'partner_id', 'user_id']\n"
@@ -1706,7 +1621,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all tasks that have been in the same stage for more than 10 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=10)).strftime('%Y-%m-%d')\n"
             "result = self.env['project.task'].search_read(\n"
             "    [('write_date', '<=', cutoff), ('stage_id.fold', '=', False), ('active', '=', True)],\n"
@@ -1717,7 +1631,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total hours logged per employee this month across all projects.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['account.analytic.line'].read_group(\n"
@@ -1733,14 +1646,13 @@ FEW_SHOT_EXAMPLES = [
         "code": (
             "result = self.env['project.task'].search_read(\n"
             "    [('kanban_state', '=', 'blocked'), ('active', '=', True)],\n"
-            "    ['name', 'project_id', 'stage_id', 'user_ids', 'kanban_state_label']\n"
+            "    ['name', 'project_id', 'stage_id', 'user_ids', 'kanban_state']\n"
             ")"
         )
     },
     {
         "question": "How many tasks were closed (moved to a folded stage) this week?",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['project.task'].search_count(\n"
             "    [('stage_id.fold', '=', True), ('write_date', '>=', monday), ('active', '=', True)]\n"
@@ -1782,7 +1694,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the average resolution time for closed tickets this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "closed_tickets = self.env['helpdesk.ticket'].search(\n"
@@ -1799,7 +1710,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all helpdesk tickets that have been open for more than 5 days with no activity.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=5)).strftime('%Y-%m-%d')\n"
             "result = self.env['helpdesk.ticket'].search_read(\n"
             "    [('stage_id.fold', '=', False), ('create_date', '<=', cutoff),\n"
@@ -1811,7 +1721,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the number of tickets created per day this week.",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['helpdesk.ticket'].read_group(\n"
             "    [('create_date', '>=', monday)],\n"
@@ -1823,7 +1732,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which support agent has closed the most tickets this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['helpdesk.ticket'].read_group(\n"
@@ -1849,7 +1757,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many tickets were resolved within the SLA this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['helpdesk.ticket'].search_count(\n"
@@ -1861,7 +1768,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all tickets that have breached SLA (deadline passed and still open).",
         "code": (
-            "from datetime import datetime\n"
             "now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')\n"
             "result = self.env['helpdesk.ticket'].search_read(\n"
             "    [('stage_id.fold', '=', False),\n"
@@ -1897,7 +1803,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "List all helpdesk tickets with a rating (CSAT) of 1 (unhappy) this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['helpdesk.ticket'].search_read(\n"
@@ -1909,7 +1814,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the total number of tickets received per month this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['helpdesk.ticket'].read_group(\n"
             "    [('create_date', '>=', f'{year}-01-01')],\n"
@@ -1939,7 +1843,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total sales revenue from POS today?",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
             "    [('state', 'in', ['paid', 'done', 'invoiced']), ('date_order', '>=', today)],\n"
@@ -1950,7 +1853,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the total POS revenue grouped by shop/POS config this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
@@ -1963,7 +1865,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which products are the top 10 best sellers at POS this month by quantity?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order.line'].read_group(\n"
@@ -1979,7 +1880,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many POS orders were placed today?",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].search_count(\n"
             "    [('state', 'in', ['paid', 'done', 'invoiced']), ('date_order', '>=', today)]\n"
@@ -1989,12 +1889,11 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total POS revenue per cashier this week.",
         "code": (
-            "from datetime import date, timedelta\n"
             "monday = (date.today() - timedelta(days=date.today().weekday())).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
             "    [('state', 'in', ['paid', 'done', 'invoiced']), ('date_order', '>=', monday)],\n"
-            "    ['employee_id', 'amount_total:sum'],\n"
-            "    ['employee_id'],\n"
+            "    ['user_id', 'amount_total:sum'],\n"
+            "    ['user_id'],\n"
             "    orderby='amount_total DESC'\n"
             ")"
         )
@@ -2002,7 +1901,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the average POS transaction value this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
@@ -2014,7 +1912,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show total POS revenue by payment method this month.",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.payment'].read_group(\n"
@@ -2037,7 +1934,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "How many POS orders were refunded this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].search_count(\n"
@@ -2049,7 +1945,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show the hourly sales breakdown for POS orders today.",
         "code": (
-            "from datetime import date\n"
             "today = date.today().strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
             "    [('state', 'in', ['paid', 'done', 'invoiced']), ('date_order', '>=', today)],\n"
@@ -2061,7 +1956,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Which product categories generate the most POS revenue this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order.line'].read_group(\n"
@@ -2076,7 +1970,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total tax collected at POS this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
@@ -2088,7 +1981,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show daily POS revenue trend for the last 30 days.",
         "code": (
-            "from datetime import date, timedelta\n"
             "cutoff = (date.today() - timedelta(days=30)).strftime('%Y-%m-%d')\n"
             "result = self.env['pos.order'].read_group(\n"
             "    [('state', 'in', ['paid', 'done', 'invoiced']), ('date_order', '>=', cutoff)],\n"
@@ -2112,7 +2004,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "What is the total discount given across all POS orders this month?",
         "code": (
-            "from datetime import date\n"
             "today = date.today()\n"
             "first_day = today.replace(day=1).strftime('%Y-%m-%d')\n"
             "lines = self.env['pos.order.line'].search(\n"
@@ -2168,7 +2059,6 @@ FEW_SHOT_EXAMPLES = [
     {
         "question": "Show all partners (customers/vendors) created this year.",
         "code": (
-            "from datetime import date\n"
             "year = date.today().year\n"
             "result = self.env['res.partner'].search_read(\n"
             "    [('create_date', '>=', f'{year}-01-01'), ('active', '=', True)],\n"
@@ -2180,7 +2070,7 @@ FEW_SHOT_EXAMPLES = [
         "question": "Show all products with a sales price lower than their cost price.",
         "code": (
             "products = self.env['product.template'].search(\n"
-            "    [('type', '=', 'product'), ('active', '=', True)]\n"
+            "    [('type', '=', 'consu'), ('active', '=', True)]\n"
             ")\n"
             "result = [\n"
             "    {'name': p.name, 'sales_price': p.list_price, 'cost_price': p.standard_price,\n"

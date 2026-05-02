@@ -26,7 +26,6 @@ class KnowledgeBaseDocument(models.Model):
     processed_content = fields.Text(string='Processed Text')
     vector_id = fields.Char(string='Vector DB ID') # Legacy field
     
-    # Caches using module-level locking
 
     @api.model
     def create_document(self, name, file_content, file_name):
@@ -51,16 +50,17 @@ class KnowledgeBaseDocument(models.Model):
         connection = self._get_connection_string()
         
         # Reuse the singleton embeddings instance from llm.py
-        from .llm import _embeddings_instance, _LOCK
-        import threading
+        from .llm import _embeddings_instance
         local_instance = _embeddings_instance
         if local_instance is None:
-            with _LOCK:
-                from . import llm as _llm_mod
-                if _llm_mod._embeddings_instance is None:
-                    from langchain_huggingface import HuggingFaceEmbeddings
-                    _llm_mod._embeddings_instance = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-                local_instance = _llm_mod._embeddings_instance
+            from . import llm as _llm_mod
+            if _llm_mod._embeddings_instance is None:
+                from langchain_huggingface import HuggingFaceEndpointEmbeddings
+                _llm_mod._embeddings_instance = HuggingFaceEndpointEmbeddings(
+                    model="sentence-transformers/all-MiniLM-L6-v2",
+                    huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN")
+                )
+            local_instance = _llm_mod._embeddings_instance
         
         vector_store = PGVector(
             embeddings=local_instance,

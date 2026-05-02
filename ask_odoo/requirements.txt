@@ -1,0 +1,5 @@
+langchain-postgres
+langchain-groq
+langchain-huggingface
+python-dotenv
+numpy
