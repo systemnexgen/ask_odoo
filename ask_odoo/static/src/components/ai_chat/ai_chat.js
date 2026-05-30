@@ -28,7 +28,6 @@ export class AiChat extends Component {
             documents: [], // For Knowledge Base
             chatMode: 'conversation',
             isModeDropdownOpen: false,
-            isRefreshingSchema: false,
             openMenuChatId: null,
             isListening: false,
         });
@@ -105,33 +104,8 @@ export class AiChat extends Component {
         this.sendMessage();
     }
 
-    async refreshSchema() {
-        if (this.state.isRefreshingSchema) return;
-        this.state.isRefreshingSchema = true;
 
-        // Notify user that refresh has started
-        this.notification.add("Schema refresh started. This may take a few moments...", {
-            type: "info",
-            title: "Processing",
-        });
 
-        try {
-            await this.orm.call("ask.odoo.model", "refresh_schema_index");
-            this.notification.add("Schema Refreshed Successfully!", {
-                type: "success",
-                title: "Success",
-            });
-        } catch (e) {
-            console.error(e);
-            this.notification.add("Failed to refresh schema: " + e.message, {
-                type: "danger",
-                title: "Error",
-            });
-        } finally {
-            this.state.isRefreshingSchema = false;
-            this.state.isModeDropdownOpen = false;
-        }
-    }
 
     switchToChat() {
         this.state.currentView = 'chat';
