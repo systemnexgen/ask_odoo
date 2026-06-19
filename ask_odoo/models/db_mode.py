@@ -1,7 +1,6 @@
 from odoo import models, api
 from langchain_core.messages import SystemMessage, HumanMessage
-import logging
-import json
+import logging, json, ast, re
 
 _logger = logging.getLogger(__name__)
 
@@ -186,7 +185,6 @@ class AskOdooModel(models.Model):
             'respond with: {"intent": "unsupported"}'
         )
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=refined_question),
@@ -202,7 +200,6 @@ class AskOdooModel(models.Model):
             )
 
             # Extract JSON block using regex or basic string manipulation
-            import re
             json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', raw_text, re.DOTALL)
             if json_match:
                 raw_text = json_match.group(1).strip()
@@ -211,7 +208,7 @@ class AskOdooModel(models.Model):
                 if raw_text.startswith("json"):
                     raw_text = raw_text[4:].strip()
 
-            import ast
+           
             try:
                 query_spec = json.loads(raw_text)
             except json.JSONDecodeError:
@@ -362,7 +359,7 @@ class AskOdooModel(models.Model):
             f"Results:\n{results_text}"
         )
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage
+            
             messages = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=human_prompt),

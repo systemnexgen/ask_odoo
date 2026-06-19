@@ -1,8 +1,6 @@
-from odoo import models, fields, api
+from odoo import models
 import logging
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.messages import HumanMessage, AIMessage
-
 _logger = logging.getLogger(__name__)
 
 class AskOdooModel(models.Model):
