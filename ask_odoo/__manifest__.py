@@ -1,10 +1,10 @@
 {
     'name': 'Ask Odoo',
     'version': '1.0',
-    'summary': 'A custom module scaffolded by AI',
-    'description': 'Basic module with dependencies on stock and account. Includes AI Chat Client Action.',
+    'summary': 'AI module for Odoo ERP',
+    'description': 'AI module with dependencies on stock and account. Includes AI Chat Client Action.',
     'category': 'Custom',
-    'author': 'Antigravity',
+    'author': 'System Nexgen',
     'depends': ['base', 'stock', 'account', 'web'],
     'data': [
         'security/ir.model.access.csv',

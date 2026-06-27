@@ -1,5 +1,16 @@
-langchain-postgres
-langchain-groq
-langchain-huggingface
-python-dotenv
-numpy
+# Core LangChain Framework
+langchain==1.2.4
+langchain-core==1.2.6
+langchain-community==0.4.1
+langchain-postgres==0.0.16
+langchain-groq==1.1.1
+langchain-huggingface==1.2.0
+
+# Database & PDF loaders
+psycopg2==2.9.9
+pypdf==6.5.0
+
+# Data Analysis & Environment
+numpy==2.2.6
+pandas==2.2.3
+python-dotenv==1.1.1
