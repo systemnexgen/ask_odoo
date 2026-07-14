@@ -3,6 +3,27 @@ import logging
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 _logger = logging.getLogger(__name__)
 
+def _extract_text_content(content):
+    """
+    Extract string content from LangChain message content,
+    handling list of dict/string blocks (e.g. Gemini/Gemma models).
+    """
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    parts.append(p.get("text", ""))
+            else:
+                parts.append(str(p))
+        return "".join(parts)
+    return str(content)
+
+
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
 
@@ -64,7 +85,7 @@ class AskOdooModel(models.Model):
 
             # 4. Invoke LLM directly
             ai_message = llm.invoke(prompt_messages)
-            response_text = ai_message.content
+            response_text = _extract_text_content(ai_message.content)
             
             _logger.info(
                 "\n=== [AskOdoo] DEBUG: LLM Response ===\n%s\n=====================================",

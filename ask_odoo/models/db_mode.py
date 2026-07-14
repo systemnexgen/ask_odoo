@@ -1,402 +1,361 @@
+"""
+Database Mode — MCP Client Agent.
+
+Rewrites the old rigid intent-map pipeline with an LLM agent loop
+that uses the existing mcp_server as its data backend via XML-RPC.
+This is the same protocol Claude Desktop / OpenCode use.
+
+Each tool call is tracked with name, args, result preview, duration,
+and timestamp — sent to the frontend for a "deep research" UI.
+"""
+
 from odoo import models, api
-from langchain_core.messages import SystemMessage, HumanMessage
-import logging, json, ast, re
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage, ToolMessage
+import logging
+import json
+import time
+from datetime import datetime
+
+from .mcp_client import get_mcp_client
 
 _logger = logging.getLogger(__name__)
 
 # ── Constants ────────────────────────────────────────────────────────────────
-MAX_RESULT_LIMIT = 50           # Hard cap regardless of what LLM requests
-RESULT_PREVIEW_LENGTH = 300     # Max chars for result preview in history
+MAX_AGENT_ITERATIONS = 30
+MAX_RESULT_PREVIEW = 500  # chars in tool result preview for LLM context
 
-# ── Intent Map ───────────────────────────────────────────────────────────────
-# Each entry defines a supported data area with its Odoo model, trigger
-# keywords, and the exact fields the LLM is allowed to use in queries.
-# No vector search needed — the LLM picks the right intent from this list.
 
-INTENT_MAP = [
+# ── Tool Definitions (JSON Schema for LLM tool-calling) ──────────────────────
+# These are passed to ChatGroq.bind_tools() so the LLM can invoke them.
+
+TOOL_SCHEMAS = [
     {
-        "name": "Contacts",
-        "model": "res.partner",
-        "keywords": "contact, customer, supplier, vendor, partner",
-        "fields": ["name", "email", "phone", "city", "country_id"],
+        "type": "function",
+        "function": {
+            "name": "list_models",
+            "description": (
+                "List all Odoo models that are available for querying via MCP. "
+                "Call this FIRST to discover which models you can access. "
+                "Returns a list of {model, name} objects."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
     },
     {
-        "name": "CRM Leads",
-        "model": "crm.lead",
-        "keywords": "lead, opportunity, crm, pipeline",
-        "fields": ["name", "partner_id", "stage_id", "expected_revenue", "probability"],
+        "type": "function",
+        "function": {
+            "name": "get_model_fields",
+            "description": (
+                "Get the field definitions of an Odoo model. "
+                "Returns field names with their types, labels, and relations. "
+                "Use this to understand the schema before building search queries."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {
+                        "type": "string",
+                        "description": "Technical model name, e.g. 'res.partner', 'sale.order'",
+                    },
+                },
+                "required": ["model_name"],
+            },
+        },
     },
     {
-        "name": "Sales Orders",
-        "model": "sale.order",
-        "keywords": "sale, order, quotation",
-        "fields": ["name", "partner_id", "amount_total", "state", "date_order"],
+        "type": "function",
+        "function": {
+            "name": "search_records",
+            "description": (
+                "Search and retrieve records from an Odoo model using domain filters. "
+                "Domain is a JSON-serialized list of conditions like '[[\"field\", \"operator\", \"value\"]]'. "
+                "Operators: =, !=, >, <, >=, <=, like, ilike, in, not in, child_of. "
+                "Use ilike for case-insensitive text search. "
+                "For Many2one fields (ending in _id), filter by name using "
+                "('field_id.name', 'ilike', 'value') or ('field_id', '=', id). "
+                "Returns a list of record dictionaries."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {
+                        "type": "string",
+                        "description": "Technical model name, e.g. 'sale.order'",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "JSON-serialized Odoo domain filter list, e.g. '[[\"state\", \"=\", \"sale\"]]. Use \"|\" or \"&\" as logical operators if needed.'",
+                    },
+                    "fields": {
+                        "type": "array",
+                        "description": "List of field names to return, e.g. ['name', 'amount_total']",
+                        "items": {"type": "string"},
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum number of records to return (default 20, max 50)",
+                    },
+                    "order": {
+                        "type": "string",
+                        "description": "Sort order, e.g. 'amount_total desc' or 'name asc'",
+                    },
+                },
+                "required": ["model_name"],
+            },
+        },
     },
     {
-        "name": "Employees",
-        "model": "hr.employee",
-        "keywords": "employee, staff, worker, hr",
-        "fields": ["name", "department_id", "job_id", "work_email", "parent_id"],
+        "type": "function",
+        "function": {
+            "name": "count_records",
+            "description": (
+                "Count how many records match a domain filter in an Odoo model. "
+                "Use this for aggregation questions like 'how many invoices are overdue?'"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {
+                        "type": "string",
+                        "description": "Technical model name",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "JSON-serialized Odoo domain filter list, e.g. '[[\"state\", \"=\", \"sale\"]]'",
+                    },
+                },
+                "required": ["model_name"],
+            },
+        },
     },
     {
-        "name": "Products",
-        "model": "product.template",
-        "keywords": "product, item, goods",
-        "fields": ["name", "list_price", "categ_id", "qty_available", "type"],
-    },
-    {
-        "name": "Invoices",
-        "model": "account.move",
-        "keywords": "invoice, bill, payment due, receivable",
-        "fields": ["name", "partner_id", "amount_total", "state", "invoice_date"],
-    },
-    {
-        "name": "Payments",
-        "model": "account.payment",
-        "keywords": "payment, paid, received",
-        "fields": ["partner_id", "amount", "date", "state"],
-    },
-    {
-        "name": "Inventory/Stock",
-        "model": "stock.quant",
-        "keywords": "stock, inventory, warehouse, quantity",
-        "fields": ["product_id", "location_id", "quantity"],
-    },
-    {
-        "name": "Transfers",
-        "model": "stock.picking",
-        "keywords": "transfer, delivery, receipt, shipment",
-        "fields": ["name", "partner_id", "state", "scheduled_date"],
-    },
-    {
-        "name": "Departments",
-        "model": "hr.department",
-        "keywords": "department, team, division",
-        "fields": ["name", "manager_id"],
-    },
-    {
-        "name": "Calendar",
-        "model": "calendar.event",
-        "keywords": "meeting, event, appointment, calendar",
-        "fields": ["name", "start", "stop", "partner_ids"],
-    },
-    {
-        "name": "Companies",
-        "model": "res.company",
-        "keywords": "company, branch, entity",
-        "fields": ["name", "email", "phone"],
+        "type": "function",
+        "function": {
+            "name": "read_group",
+            "description": (
+                "Perform aggregated/grouped queries on an Odoo model. "
+                "Similar to SQL GROUP BY. Use for summaries like 'total sales by customer' "
+                "or 'average order value by month'. "
+                "Fields should include the measure (e.g. 'amount_total') and groupby field. "
+                "Supported aggregates: field_name:sum, field_name:avg, field_name:max, etc."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {
+                        "type": "string",
+                        "description": "Technical model name",
+                    },
+                    "domain": {
+                        "type": "string",
+                        "description": "JSON-serialized Odoo domain filter list, e.g. '[[\"state\", \"=\", \"sale\"]]'",
+                    },
+                    "fields": {
+                        "type": "array",
+                        "description": "Fields to aggregate, e.g. ['amount_total', 'partner_id']",
+                        "items": {"type": "string"},
+                    },
+                    "groupby": {
+                        "type": "array",
+                        "description": "Fields to group by, e.g. ['partner_id', 'state']",
+                        "items": {"type": "string"},
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Max groups to return",
+                    },
+                    "orderby": {
+                        "type": "string",
+                        "description": "Sort order for groups, e.g. 'amount_total desc'",
+                    },
+                },
+                "required": ["model_name", "fields", "groupby"],
+            },
+        },
     },
 ]
 
 
-def _build_intent_context():
-    """Format the intent map into a string the LLM can use as context."""
-    lines = []
-    for intent in INTENT_MAP:
-        lines.append(
-            f"- {intent['name']} | model: {intent['model']} | "
-            f"keywords: {intent['keywords']} | "
-            f"fields: {', '.join(intent['fields'])}"
-        )
-    return "\n".join(lines)
+# ── Tool Execution Engine ────────────────────────────────────────────────────
+
+def _parse_domain(domain_arg):
+    """
+    Parse domain argument which can be a JSON string or a python list/tuple.
+    """
+    if not domain_arg:
+        return []
+    if isinstance(domain_arg, str):
+        try:
+            return json.loads(domain_arg)
+        except Exception as e:
+            _logger.warning("Failed to parse JSON domain string: %s. Using empty list.", e)
+            return []
+    return domain_arg
 
 
-# Pre-build the context string (module-level, constant)
-_INTENT_CONTEXT = _build_intent_context()
+def _execute_tool(tool_name, tool_args, allowed_company_ids=None):
+    """
+    Execute a single MCP tool call and return (result, duration_ms, error).
+
+    All calls go through the MCP XML-RPC client, which means they pass
+    through the mcp_server's access control, rate limiting, and logging.
+    """
+    client = get_mcp_client()
+
+    try:
+        if tool_name == "list_models":
+            result, duration = client.list_models()
+            return result, duration, None
+
+        elif tool_name == "get_model_fields":
+            model_name = tool_args.get("model_name", "")
+            raw_fields, duration = client.get_model_fields(model_name)
+            # Simplify the fields dict for LLM context (reduce token usage)
+            simplified = {}
+            for fname, fdata in raw_fields.items():
+                entry = {"type": fdata.get("type", ""), "label": fdata.get("string", "")}
+                if fdata.get("relation"):
+                    entry["relation"] = fdata["relation"]
+                simplified[fname] = entry
+            return simplified, duration, None
+
+        elif tool_name == "search_records":
+            model_name = tool_args.get("model_name", "")
+            domain = _parse_domain(tool_args.get("domain"))
+            fields = tool_args.get("fields", [])
+            limit = tool_args.get("limit", 20)
+            order = tool_args.get("order", "")
+            result, duration = client.search_records(
+                model_name, domain, fields, limit, order,
+                allowed_company_ids=allowed_company_ids,
+            )
+            # Clean up Many2one tuples: [id, "name"] → "name"
+            clean = []
+            for row in (result or []):
+                clean_row = {}
+                for k, v in row.items():
+                    if k == "id":
+                        clean_row[k] = v
+                    elif isinstance(v, list) and len(v) == 2 and isinstance(v[0], int):
+                        clean_row[k] = v[1]  # Display name
+                    elif isinstance(v, list) and len(v) > 2:
+                        clean_row[k] = f"{len(v)} records"
+                    elif v is False:
+                        clean_row[k] = None
+                    else:
+                        clean_row[k] = v
+                clean.append(clean_row)
+            return clean, duration, None
+
+        elif tool_name == "count_records":
+            model_name = tool_args.get("model_name", "")
+            domain = _parse_domain(tool_args.get("domain"))
+            result, duration = client.count_records(
+                model_name, domain, allowed_company_ids=allowed_company_ids
+            )
+            return {"count": result}, duration, None
+
+        elif tool_name == "read_group":
+            model_name = tool_args.get("model_name", "")
+            domain = _parse_domain(tool_args.get("domain"))
+            fields = tool_args.get("fields", [])
+            groupby = tool_args.get("groupby", [])
+            limit = tool_args.get("limit")
+            orderby = tool_args.get("orderby")
+            result, duration = client.read_group(
+                model_name, domain, fields, groupby, limit, orderby,
+                allowed_company_ids=allowed_company_ids,
+            )
+            # Clean up Many2one tuples in grouped results
+            clean = []
+            for row in (result or []):
+                clean_row = {}
+                for k, v in row.items():
+                    if k == "__domain":
+                        continue  # skip internal domain
+                    elif isinstance(v, list) and len(v) == 2 and isinstance(v[0], int):
+                        clean_row[k] = v[1]
+                    elif v is False:
+                        clean_row[k] = None
+                    else:
+                        clean_row[k] = v
+                clean.append(clean_row)
+            return clean, duration, None
+
+        else:
+            return None, 0, f"Unknown tool: {tool_name}"
+
+    except Exception as e:
+        return None, 0, str(e)
+
+
+# ── System Prompt ────────────────────────────────────────────────────────────
+
+SYSTEM_PROMPT = """\
+You are an Odoo ERP data assistant connected to a live Odoo database via MCP tools.
+
+## Your Workflow
+1. **Discover**: Call `list_models` to see what models are available.
+2. **Inspect**: Call `get_model_fields` to understand the schema of relevant models.
+3. **Query**: Use `search_records`, `count_records`, or `read_group` to fetch data.
+4. **Synthesize**: Format the results into a clear, professional answer.
+
+## Rules
+- ALWAYS call `list_models` first if you don't know what's available.
+- ALWAYS call `get_model_fields` before `search_records` to verify field names exist.
+- Use `ilike` for case-insensitive text matching.
+- For Many2one fields (e.g. partner_id, product_id), filter by subfield:
+  `['partner_id.name', 'ilike', 'Azure']` or `['partner_id', '=', 42]`.
+- For date filters, use ISO format: `['date_order', '>=', '2025-01-01']`.
+- Use `read_group` for aggregate queries (sums, counts, averages by group).
+- Limit results to 50 max. Default to 20.
+- If a tool call fails, read the error and adjust your query.
+- Do NOT invent data. Only present what the tools return.
+- Format lists as markdown tables. Format single values as brief sentences.
+- Be concise and professional. Max 300 words in your final answer.
+"""
+
+
+def _extract_text_content(content):
+    """
+    Extract string content from LangChain message content,
+    handling list of dict/string blocks (e.g. Gemini/Gemma models).
+    """
+    if not content:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for p in content:
+            if isinstance(p, dict):
+                if p.get("type") == "text":
+                    parts.append(p.get("text", ""))
+            else:
+                parts.append(str(p))
+        return "".join(parts)
+    return str(content)
 
 
 class AskOdooModel(models.Model):
     _inherit = 'ask.odoo.model'
 
-    # ── Step 1: Prompt Refiner ───────────────────────────────────────────────
-
-    def _refine_question(self, question, history=None):
-        """Clean and standardize the user's Odoo ERP question.
-
-        Fixes typos, expands abbreviations, and returns only the
-        refined question string.
-        """
-        llm = self._get_llm()
-
-        try:
-            system_msg = SystemMessage(content=(
-                "You are an Odoo ERP question refiner. "
-                "Your task is to take the current user question and the conversation history, "
-                "and produce a single, self-contained, and refined Odoo ERP query question. "
-                "Make sure to resolve all pronouns and relative terms (e.g. 'them', 'it', 'show those', "
-                "'filter by...') based on the previous messages. "
-                "Standardize terms, fix typos, and expand abbreviations (e.g. SO → Sales Order, PO → Purchase Order, "
-                "inv → invoice, emp → employee, dept → department). "
-                "Return ONLY the refined question, nothing else."
-            ))
-            
-            messages = [system_msg]
-            if history:
-                messages.extend(history)
-            
-            messages.append(HumanMessage(content=question))
-            
-            response = llm.invoke(messages)
-            refined = response.content.strip()
-            _logger.info(
-                "\n=== [AskOdoo][DB MODE] Step 1 — Refined Question ===\n"
-                "Original : %s\nRefined  : %s\n"
-                "=====================================================",
-                question, refined,
-            )
-            return refined
-        except Exception as e:
-            _logger.warning("AskOdoo: Prompt refiner failed, using original: %s", e)
-            return question
-
-    # ── Step 2: Query Generator ──────────────────────────────────────────────
-
-    def _generate_query(self, refined_question):
-        """Generate a structured ORM query specification from the refined question.
-
-        Returns a dict with keys: intent, model, domain, fields, limit, order.
-        Returns None if the LLM cannot map the question to an intent.
-        """
-        llm = self._get_llm()
-
-        system_prompt = (
-            "You are an Odoo ORM query generator. "
-            "Given the question and available data areas below, respond with JSON only:\n"
-            "{\n"
-            '  "intent": "intent_name",\n'
-            '  "model": "odoo.model.name",\n'
-            '  "domain": [["field", "operator", "value"]],\n'
-            '  "fields": ["field1", "field2"],\n'
-            '  "limit": 20,\n'
-            '  "order": "field desc"\n'
-            "}\n\n"
-            "Available data areas:\n"
-            f"{_INTENT_CONTEXT}\n\n"
-            "Rules:\n"
-            "- Only use fields listed for that intent\n"
-            "- Use valid Odoo domain syntax with proper operators "
-            "(=, !=, >, <, >=, <=, like, ilike, in, not in)\n"
-            "- IMPORTANT: The domain MUST be valid JSON (use lists of lists, NOT Python tuples). "
-            "Example: [[\"state\", \"=\", \"draft\"]]\n"
-            "- For Many2one fields (ending in _id), use the field name directly "
-            "for domain filters (e.g., ('partner_id', 'ilike', 'name'))\n"
-            "- Return JSON only, no explanation\n"
-            "- If the question does not match any available data area, "
-            'respond with: {"intent": "unsupported"}'
-        )
-        try:
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=refined_question),
-            ]
-            response = llm.invoke(messages)
-            raw_text = response.content.strip()
-
-            _logger.info(
-                "\n=== [AskOdoo][DB MODE] Step 2 — Query Generator Raw ===\n"
-                "%s\n"
-                "=======================================================",
-                raw_text,
-            )
-
-            # Extract JSON block using regex or basic string manipulation
-            json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', raw_text, re.DOTALL)
-            if json_match:
-                raw_text = json_match.group(1).strip()
-            else:
-                raw_text = raw_text.strip("`").strip()
-                if raw_text.startswith("json"):
-                    raw_text = raw_text[4:].strip()
-
-           
-            try:
-                query_spec = json.loads(raw_text)
-            except json.JSONDecodeError:
-                # Fallback: Sometimes LLMs output Python dicts/tuples instead of pure JSON
-                query_spec = ast.literal_eval(raw_text)
-
-            # Check for unsupported intent
-            if query_spec.get("intent") == "unsupported":
-                _logger.info("AskOdoo: Question mapped to unsupported intent.")
-                return None
-
-            # Clamp limit to MAX_RESULT_LIMIT
-            raw_limit = query_spec.get("limit", 20)
-            if isinstance(raw_limit, int):
-                query_spec["limit"] = min(raw_limit, MAX_RESULT_LIMIT)
-            else:
-                query_spec["limit"] = 20
-
-            # Ensure domain is a list of lists/tuples
-            domain = query_spec.get("domain", [])
-            if not isinstance(domain, list):
-                query_spec["domain"] = []
-            else:
-                # Convert any inner lists to tuples for Odoo ORM (Odoo domain format)
-                formatted_domain = []
-                for term in domain:
-                    if isinstance(term, list):
-                        formatted_domain.append(tuple(term))
-                    else:
-                        formatted_domain.append(term)
-                query_spec["domain"] = formatted_domain
-
-            _logger.info(
-                "\n=== [AskOdoo][DB MODE] Step 2 — Parsed Query ===\n"
-                "Intent: %s | Model: %s | Limit: %d\n"
-                "Domain: %s\nFields: %s\nOrder: %s\n"
-                "=================================================",
-                query_spec.get("intent"), query_spec.get("model"),
-                query_spec.get("limit", 20),
-                query_spec.get("domain"), query_spec.get("fields"),
-                query_spec.get("order"),
-            )
-
-            return query_spec
-
-        except (json.JSONDecodeError, ValueError, SyntaxError) as e:
-            _logger.error("AskOdoo: Failed to parse query generator output: %s", e)
-            return None
-        except Exception as e:
-            _logger.exception("AskOdoo: Query generator failed: %s", e)
-            return None
-
-    # ── ORM Execution ────────────────────────────────────────────────────────
-
-    def _execute_orm_query(self, query_spec):
-        """Execute the ORM query from the spec and return results.
-
-        Returns (results_list, error_string).
-        On success: (list_of_dicts, None)
-        On failure: (None, friendly_error_message)
-        """
-        model_name = query_spec.get("model", "")
-        domain = query_spec.get("domain", [])
-        field_list = query_spec.get("fields", [])
-        limit = query_spec.get("limit", 20)
-        order = query_spec.get("order", "")
-
-        # Validate model exists
-        if model_name not in self.env:
-            available = [
-                i["name"] for i in INTENT_MAP
-                if i["model"] in self.env
-            ]
-            return None, (
-                f"**❌ Model not found:** `{model_name}` does not exist in this Odoo instance.\n\n"
-                f"Available data areas: {', '.join(available)}"
-            )
-
-        try:
-            # Execute search_read — ORM enforces user permissions automatically
-            results = self.env[model_name].search_read(
-                domain,
-                field_list,
-                limit=limit,
-                order=order or None,
-            )
-
-            # Clean up Many2one tuples: (id, name) → name
-            clean_results = []
-            for row in results:
-                clean_row = {}
-                for k, v in row.items():
-                    if k == 'id' and len(row) > 1:
-                        continue  # Skip internal ID if other fields are present
-                    if isinstance(v, (list, tuple)) and len(v) == 2 and isinstance(v[0], int) and isinstance(v[1], str):
-                        clean_row[k] = v[1]  # Extract display name
-                    elif isinstance(v, (list, tuple)) and len(v) > 2:
-                        clean_row[k] = f"{len(v)} records"
-                    else:
-                        clean_row[k] = v
-                clean_results.append(clean_row)
-
-            _logger.info(
-                "AskOdoo: ORM query returned %d results from %s",
-                len(clean_results), model_name,
-            )
-
-            return clean_results, None
-
-        except Exception as e:
-            _logger.exception("AskOdoo: ORM execution failed for %s", model_name)
-            return None, (
-                f"**❌ Query Error:** Could not retrieve data from `{model_name}`.\n\n"
-                f"**Reason:** {str(e)}\n\n"
-                "Please try rephrasing your question."
-            )
-
-    # ── Step 3: Response Formatter ───────────────────────────────────────────
-
-    def _format_response(self, question, results, intent_name=""):
-        """Format ORM results into a clear, concise answer using the LLM.
-
-        Uses markdown tables for lists. Max 200 words.
-        """
-        llm = self._get_llm()
-
-        # Truncate results for the LLM context if too large
-        results_text = json.dumps(results[:MAX_RESULT_LIMIT], default=str, indent=2)
-        if len(results_text) > 4000:
-            results_text = results_text[:4000] + "\n... (truncated)"
-
-        system_prompt = (
-            "You are an Odoo data presentation assistant. "
-            "Format the following database results into a clear, concise answer. "
-            "Rules:\n"
-            "- Use markdown tables for list data (more than 1 record)\n"
-            "- For single values or counts, present as a brief sentence\n"
-            "- Max 200 words\n"
-            "- Be direct and professional\n"
-            "- Do NOT add disclaimers or explain what you did\n"
-            "- If results are empty, say 'No records found' clearly"
-        )
-
-        human_prompt = (
-            f"Question: {question}\n"
-            f"Data Area: {intent_name}\n"
-            f"Number of results: {len(results)}\n"
-            f"Results:\n{results_text}"
-        )
-        try:
-            
-            messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=human_prompt),
-            ]
-            response = llm.invoke(messages)
-            formatted = response.content.strip()
-
-            _logger.info(
-                "\n=== [AskOdoo][DB MODE] Step 3 — Formatted Response ===\n"
-                "%s\n"
-                "======================================================",
-                formatted[:500],
-            )
-
-            return formatted
-
-        except Exception as e:
-            _logger.warning("AskOdoo: Response formatter failed: %s", e)
-            # Fallback: return raw results as a simple string
-            if not results:
-                return "No records found."
-            return f"Found {len(results)} records:\n```json\n{results_text}\n```"
-
-    # ── Main Entry Point ─────────────────────────────────────────────────────
+    # ── Main Entry Point ─────────────────────────────────────────────────
 
     def process_message_db(self, message, conversation_id=None):
-        """Handle database queries using the 3-step intent pipeline.
-
-        This replaces the old RAG-based code generation approach with:
-          Step 1 — Prompt Refiner (clean the question)
-          Step 2 — Query Generator (map to ORM query via intent)
-          Step 3 — Response Formatter (present results in markdown)
-
-        Maintains the same function signature and return shape that the
-        frontend (ai_chat.js) expects.
         """
-        _logger.info("AskOdoo: Processing message in DATABASE mode (intent pipeline)")
+        Handle database queries using the MCP Client Agent loop.
+
+        The LLM decides which tools to call, executes them via the
+        mcp_server XML-RPC endpoints, and synthesizes a final answer.
+        Each tool call is tracked for the frontend's deep-research UI.
+        """
+        allowed_company_ids = self.env.context.get('allowed_company_ids') or self.env.companies.ids
+        _logger.info("AskOdoo: Processing message in DATABASE mode (MCP Agent). Allowed companies: %s", allowed_company_ids)
 
         # 1. Handle Conversation
         conversation, user_msg = self._ensure_conversation(
@@ -404,62 +363,133 @@ class AskOdooModel(models.Model):
         )
 
         response_text = ""
+        tool_steps = []
+
         try:
-            # Fetch conversation history excluding the current user message
+            # Fetch conversation history
             history = self._get_history(conversation.id, exclude_id=user_msg.id)
 
-            # Step 1 — Refine the question using history context
-            refined = self._refine_question(message, history=history)
+            # Build the LLM with tools bound
+            llm = self._get_llm()
+            llm_with_tools = llm.bind_tools(TOOL_SCHEMAS)
 
-            # Step 2 — Generate query specification
-            query_spec = self._generate_query(refined)
+            # Build initial message list
+            messages = [SystemMessage(content=SYSTEM_PROMPT)]
+            if history:
+                messages.extend(history)
+            messages.append(HumanMessage(content=message))
 
-            if query_spec is None:
-                response_text = (
-                    "**⚠️ Unsupported data area.**\n\n"
-                    "I couldn't map your question to a supported data area. "
-                    "Currently supported areas:\n\n"
-                    + "\n".join(
-                        f"- **{i['name']}** ({i['keywords']})"
-                        for i in INTENT_MAP
-                    )
-                    + "\n\nPlease rephrase your question using one of these areas, "
-                    "or contact your administrator to add support for more data areas."
+            # ── Agent Loop ────────────────────────────────────────────
+            for iteration in range(MAX_AGENT_ITERATIONS):
+                _logger.info(
+                    "AskOdoo MCP Agent: Iteration %d/%d",
+                    iteration + 1, MAX_AGENT_ITERATIONS,
                 )
-            else:
-                # Execute ORM query
-                results, error = self._execute_orm_query(query_spec)
 
-                if error:
-                    response_text = error
-                elif not results:
-                    response_text = (
-                        f"**No records found** for your query in "
-                        f"**{query_spec.get('intent', 'Unknown')}**.\n\n"
-                        "Try broadening your search or adjusting the criteria."
+                # Call LLM
+                ai_response = llm_with_tools.invoke(messages)
+                messages.append(ai_response)
+
+                # Check if LLM wants to call tools
+                tool_calls = ai_response.tool_calls
+                if not tool_calls:
+                    # No more tool calls — LLM has produced a final answer
+                    response_text = _extract_text_content(ai_response.content)
+                    _logger.info(
+                        "AskOdoo MCP Agent: Final answer at iteration %d",
+                        iteration + 1,
                     )
-                else:
-                    # Step 3 — Format the response
-                    response_text = self._format_response(
-                        refined, results,
-                        intent_name=query_spec.get("intent", ""),
+                    break
+
+                # Execute each tool call
+                for tc in tool_calls:
+                    tool_name = tc["name"]
+                    tool_args = tc.get("args", {})
+                    tool_id = tc.get("id", f"call_{iteration}_{tool_name}")
+                    timestamp = datetime.now().strftime("%H:%M:%S")
+
+                    _logger.info(
+                        "AskOdoo MCP Agent: Calling tool '%s' with args: %s",
+                        tool_name, json.dumps(tool_args, default=str)[:300],
                     )
+
+                    # Execute through MCP XML-RPC
+                    result, duration_ms, error = _execute_tool(
+                        tool_name, tool_args, allowed_company_ids=allowed_company_ids
+                    )
+
+                    if error:
+                        tool_result_str = json.dumps({"error": error}, default=str)
+                        step_status = "error"
+                    else:
+                        tool_result_str = json.dumps(result, default=str)
+                        step_status = "success"
+
+                    # Truncate for LLM context to avoid token overflow
+                    llm_result = tool_result_str
+                    if len(llm_result) > 4000:
+                        llm_result = llm_result[:4000] + "\n... (truncated)"
+
+                    # Build result preview for the UI (shorter)
+                    result_preview = tool_result_str[:MAX_RESULT_PREVIEW]
+                    if len(tool_result_str) > MAX_RESULT_PREVIEW:
+                        result_preview += "..."
+
+                    # Record step for frontend tracking
+                    step = {
+                        "tool": tool_name,
+                        "args": tool_args,
+                        "result_preview": result_preview,
+                        "duration_ms": duration_ms,
+                        "timestamp": timestamp,
+                        "status": step_status,
+                        "iteration": iteration + 1,
+                    }
+                    tool_steps.append(step)
+
+                    _logger.info(
+                        "AskOdoo MCP Agent: Tool '%s' → %s (%dms)",
+                        tool_name, step_status, duration_ms,
+                    )
+
+                    # Feed result back to the LLM as a ToolMessage
+                    messages.append(
+                        ToolMessage(content=llm_result, tool_call_id=tool_id)
+                    )
+
+            else:
+                # Exhausted iterations
+                response_text = (
+                    "I reached the maximum number of steps while analyzing your query. "
+                    "Here's what I found so far:\n\n" + _extract_text_content(ai_response.content)
+                )
 
         except Exception as e:
-            _logger.exception("AskOdoo: Database Mode Pipeline Failed")
-            response_text = (
-                f"**❌ Error:** {str(e)}\n\n"
-                "An unexpected error occurred. Please try again."
-            )
+            _logger.exception("AskOdoo: MCP Agent Pipeline Failed")
+            error_msg = str(e)
+            # Provide a user-friendly error for common issues
+            if "authenticate" in error_msg.lower() or "api_key" in error_msg.lower():
+                response_text = (
+                    "**❌ MCP Connection Error**\n\n"
+                    "Could not connect to the MCP server. Please verify:\n"
+                    "- `MCP_URL`, `MCP_DB`, and `MCP_API_KEY` are set in the `.env` file\n"
+                    "- The MCP Server module is installed and enabled\n"
+                    "- An API key has been generated for your user"
+                )
+            else:
+                response_text = (
+                    f"**❌ Error:** {error_msg}\n\n"
+                    "An unexpected error occurred. Please try again."
+                )
 
-        # Save AI message to conversation history
+        # Save AI message
         self.env['ask.odoo.message'].create({
             'conversation_id': conversation.id,
             'type': 'ai',
             'content': response_text,
         })
 
-        # Update conversation metadata (title, last_activity)
+        # Update conversation metadata
         self._update_conversation_metadata(conversation, message)
 
         return {
@@ -468,4 +498,5 @@ class AskOdooModel(models.Model):
             'title': conversation.name,
             'execution_result': None,
             'has_code': False,
+            'tool_steps': tool_steps,
         }

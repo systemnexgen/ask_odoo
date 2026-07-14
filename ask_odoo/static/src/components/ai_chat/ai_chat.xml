@@ -141,6 +141,76 @@
                                             </div>
                                         </t>
 
+                                        <!-- TOOL STEPS MESSAGE (Deep Research UI) -->
+                                        <t t-elif="message.type === 'tool_steps'">
+                                            <div class="o_message_row d-flex mb-4 justify-content-start">
+                                                <div class="o_ai_avatar me-3 mt-1">
+                                                    <i class="fa fa-bolt"></i>
+                                                </div>
+                                                <div class="o_tool_steps_container" style="max-width: 85%; width: 100%;">
+                                                    <!-- Collapsible Header -->
+                                                    <div class="o_tool_steps_header cursor-pointer d-flex align-items-center"
+                                                         t-on-click="() => this.toggleToolSteps(message)">
+                                                        <div class="o_tool_steps_icon me-2">
+                                                            <i class="fa fa-database"></i>
+                                                        </div>
+                                                        <span class="o_tool_steps_title">
+                                                            Analyzed data
+                                                        </span>
+                                                        <span class="o_tool_steps_count ms-2">
+                                                            <t t-esc="message.toolSteps.length"/> steps
+                                                        </span>
+                                                        <i t-attf-class="fa fa-chevron-{{ message.isExpanded ? 'up' : 'down' }} ms-auto o_tool_steps_chevron"></i>
+                                                    </div>
+
+                                                    <!-- Expanded Steps -->
+                                                    <div t-if="message.isExpanded" class="o_tool_steps_body">
+                                                        <t t-foreach="message.toolSteps" t-as="step" t-key="step_index">
+                                                            <div t-attf-class="o_tool_step {{ step.status === 'error' ? 'o_step_error' : 'o_step_success' }}">
+                                                                <div class="o_step_header d-flex align-items-center"
+                                                                     t-on-click="() => this.toggleStepDetail(step)">
+                                                                    <!-- Status Icon -->
+                                                                    <div t-attf-class="o_step_status_icon me-2 {{ step.status === 'error' ? 'text-danger' : '' }}">
+                                                                        <i t-attf-class="fa {{ step.status === 'error' ? 'fa-exclamation-circle' : 'fa-check-circle' }}"></i>
+                                                                    </div>
+                                                                    <!-- Tool Name & Args Summary -->
+                                                                    <div class="o_step_info flex-grow-1">
+                                                                        <span class="o_step_tool_name">
+                                                                            <t t-esc="step.toolLabel"/>
+                                                                        </span>
+                                                                        <span t-if="step.argsSummary" class="o_step_args_summary">
+                                                                            <t t-esc="step.argsSummary"/>
+                                                                        </span>
+                                                                    </div>
+                                                                    <!-- Duration & Timestamp -->
+                                                                    <div class="o_step_meta d-flex align-items-center">
+                                                                        <span class="o_step_duration me-2" t-if="step.duration_ms">
+                                                                            <t t-esc="step.duration_ms"/>ms
+                                                                        </span>
+                                                                        <span class="o_step_timestamp">
+                                                                            <t t-esc="step.timestamp"/>
+                                                                        </span>
+                                                                        <i t-attf-class="fa fa-chevron-{{ step.isDetailOpen ? 'up' : 'down' }} ms-2 o_step_detail_chevron"></i>
+                                                                    </div>
+                                                                </div>
+                                                                <!-- Expandable Result -->
+                                                                <div t-if="step.isDetailOpen" class="o_step_detail">
+                                                                    <div t-if="step.argsSummaryFull" class="o_step_detail_section">
+                                                                        <div class="o_step_detail_label">Arguments</div>
+                                                                        <pre class="o_step_detail_code"><t t-esc="step.argsSummaryFull"/></pre>
+                                                                    </div>
+                                                                    <div class="o_step_detail_section">
+                                                                        <div class="o_step_detail_label">Result</div>
+                                                                        <pre class="o_step_detail_code"><t t-esc="step.result_preview"/></pre>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </t>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </t>
+
                                         <!-- STANDARD MESSAGES -->
                                         <div t-else="" t-attf-class="o_message_row d-flex mb-4 {{ message.type === 'user' ? 'justify-content-end' : 'justify-content-start' }}">
                                             

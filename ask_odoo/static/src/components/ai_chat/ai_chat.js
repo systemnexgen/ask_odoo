@@ -12,6 +12,7 @@ export class AiChat extends Component {
     setup() {
         this.orm = useService("orm");
         this.notification = useService("notification");
+        this.companyService = useService("company");
 
         // Restore dark mode from localStorage
         const savedDarkMode = localStorage.getItem('askOdooDarkMode');
@@ -56,6 +57,40 @@ export class AiChat extends Component {
 
     toggleTable(message) {
         message.isTableExpanded = !message.isTableExpanded;
+    }
+
+    toggleToolSteps(message) {
+        message.isExpanded = !message.isExpanded;
+    }
+
+    toggleStepDetail(step) {
+        step.isDetailOpen = !step.isDetailOpen;
+    }
+
+    /**
+     * Build a human-readable label for a tool name.
+     */
+    _getToolLabel(toolName) {
+        const labels = {
+            list_models: 'Discovering available models',
+            get_model_fields: 'Inspecting model schema',
+            search_records: 'Searching records',
+            count_records: 'Counting records',
+            read_group: 'Aggregating data',
+        };
+        return labels[toolName] || toolName;
+    }
+
+    /**
+     * Build a short summary of tool arguments for the step header.
+     */
+    _getArgsSummary(toolName, args) {
+        if (!args) return '';
+        if (toolName === 'get_model_fields' || toolName === 'search_records' ||
+            toolName === 'count_records' || toolName === 'read_group') {
+            return args.model_name ? `(${args.model_name})` : '';
+        }
+        return '';
     }
 
     toggleTheme() {
@@ -298,10 +333,12 @@ export class AiChat extends Component {
 
     // Simple regex-based markdown parser
     formatMessage(text) {
-        if (!text) return "";
+        if (text === undefined || text === null) return "";
+        const safeTextStr = String(text);
+        if (!safeTextStr) return "";
 
         // 1. Escape HTML to prevent injection (since we trust our simple parser, but input could be anything)
-        let safeText = text
+        let safeText = safeTextStr
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;");
@@ -317,15 +354,16 @@ export class AiChat extends Component {
 
         // A. Tables (Simple GFM style)
         // Look for headers: | ... | ... | followed by separator: | --- | --- |
-        safeText = safeText.replace(/(\|[^\n]+\|\r?\n)((?:\|:?[-]+:?)+\|)(\r?\n(?:\|[^\n]+\|\r?\n?)*)/g, (match, header, separator, body) => {
+        safeText = safeText.replace(/(\|[^\n]+\|\r?\n)((?:\|\s*:?[-]+\s*:?\s*)+\|)(\r?\n(?:\|[^\n]+\|\r?\n?)*)/g, (match, header, separator, body) => {
             try {
                 const parseRow = (row) => row.trim().split('|').filter(c => c && c.trim() !== '').map(c => c.trim());
 
                 const headers = parseRow(header);
                 const separators = parseRow(separator);
                 const alignments = separators.map(s => {
-                    if (s.startsWith(':') && s.endsWith(':')) return 'center';
-                    if (s.endsWith(':')) return 'right';
+                    const cleanS = s.trim();
+                    if (cleanS.startsWith(':') && cleanS.endsWith(':')) return 'center';
+                    if (cleanS.endsWith(':')) return 'right';
                     return 'left';
                 });
 
@@ -422,11 +460,30 @@ export class AiChat extends Component {
             const result = await this.orm.call(
                 "ask.odoo.model",     // Model Name
                 "process_message",    // Method Name
-                [text, this.state.currentChatId, this.state.chatMode] // Arguments
+                [text, this.state.currentChatId, this.state.chatMode], // Arguments
+                { context: { allowed_company_ids: this.companyService.activeCompanyIds } }
             );
 
             // Update Chat ID (essential if it was null/new)
             this.state.currentChatId = result.conversation_id;
+
+            // ── Tool Steps (Deep Research UI) ──
+            // If the backend returned tool_steps, show them as a collapsible section
+            if (result.tool_steps && result.tool_steps.length > 0) {
+                const enrichedSteps = result.tool_steps.map(step => ({
+                    ...step,
+                    toolLabel: this._getToolLabel(step.tool),
+                    argsSummary: this._getArgsSummary(step.tool, step.args),
+                    argsSummaryFull: step.args ? JSON.stringify(step.args, null, 2) : '',
+                    isDetailOpen: false,
+                }));
+                this.state.messages.push({
+                    id: Date.now() + 0.5,
+                    type: 'tool_steps',
+                    toolSteps: enrichedSteps,
+                    isExpanded: false,
+                });
+            }
 
             // Add AI Response (Formatted), skip if it has code to hide explanation
             if (!result.has_code) {

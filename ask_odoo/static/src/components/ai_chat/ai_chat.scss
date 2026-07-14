@@ -895,6 +895,220 @@
     }
 
     // =========================================================================
+    // TOOL EXECUTION TRACKING (Deep Research UI)
+    // =========================================================================
+    .o_tool_steps_container {
+        animation: askMessageIn 0.3s ease-out;
+
+        .o_tool_steps_header {
+            padding: 10px 16px;
+            border-radius: var(--ask-radius-md);
+            background: var(--ask-bg-secondary);
+            border: 1px solid var(--ask-border);
+            transition: all var(--ask-transition);
+            user-select: none;
+
+            &:hover {
+                background: var(--ask-bg-hover);
+                border-color: var(--ask-accent);
+            }
+
+            .o_tool_steps_icon {
+                width: 24px;
+                height: 24px;
+                border-radius: 6px;
+                background: var(--ask-accent-soft);
+                color: var(--ask-accent);
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 0.7rem;
+                flex-shrink: 0;
+            }
+
+            .o_tool_steps_title {
+                font-size: 0.85rem;
+                font-weight: 600;
+                color: var(--ask-text-primary);
+            }
+
+            .o_tool_steps_count {
+                font-size: 0.75rem;
+                color: var(--ask-text-muted);
+                background: var(--ask-bg-hover);
+                padding: 2px 8px;
+                border-radius: var(--ask-radius-full);
+            }
+
+            .o_tool_steps_chevron {
+                font-size: 0.7rem;
+                color: var(--ask-text-muted);
+                transition: transform var(--ask-transition);
+            }
+        }
+
+        .o_tool_steps_body {
+            margin-top: 4px;
+            border: 1px solid var(--ask-border);
+            border-radius: var(--ask-radius-md);
+            overflow: hidden;
+            background: var(--ask-bg-secondary);
+            animation: askStepsExpand 0.2s ease-out;
+        }
+
+        .o_tool_step {
+            border-bottom: 1px solid var(--ask-border-subtle);
+
+            &:last-child {
+                border-bottom: none;
+            }
+
+            .o_step_header {
+                padding: 10px 14px;
+                cursor: pointer;
+                transition: background var(--ask-transition);
+
+                &:hover {
+                    background: var(--ask-bg-hover);
+                }
+            }
+
+            .o_step_status_icon {
+                width: 20px;
+                height: 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                flex-shrink: 0;
+
+                i {
+                    font-size: 0.8rem;
+                }
+
+                &:not(.text-danger) {
+                    color: var(--ask-success);
+                }
+            }
+
+            .o_step_info {
+                min-width: 0;
+                overflow: hidden;
+            }
+
+            .o_step_tool_name {
+                font-size: 0.82rem;
+                font-weight: 600;
+                color: var(--ask-text-primary);
+            }
+
+            .o_step_args_summary {
+                font-size: 0.75rem;
+                color: var(--ask-text-muted);
+                margin-left: 6px;
+                font-family: monospace;
+            }
+
+            .o_step_meta {
+                flex-shrink: 0;
+            }
+
+            .o_step_duration {
+                font-size: 0.7rem;
+                font-weight: 600;
+                color: var(--ask-accent-text);
+                background: var(--ask-accent-soft);
+                padding: 2px 7px;
+                border-radius: var(--ask-radius-full);
+                font-family: monospace;
+            }
+
+            .o_step_timestamp {
+                font-size: 0.7rem;
+                color: var(--ask-text-muted);
+                font-family: monospace;
+            }
+
+            .o_step_detail_chevron {
+                font-size: 0.6rem;
+                color: var(--ask-text-muted);
+                transition: transform var(--ask-transition);
+            }
+
+            // Expanded detail section
+            .o_step_detail {
+                padding: 0 14px 12px 46px; // left padding = icon width + margin
+                animation: askStepDetailIn 0.15s ease-out;
+
+                .o_step_detail_section {
+                    margin-bottom: 8px;
+
+                    &:last-child {
+                        margin-bottom: 0;
+                    }
+                }
+
+                .o_step_detail_label {
+                    font-size: 0.7rem;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: 0.04em;
+                    color: var(--ask-text-muted);
+                    margin-bottom: 4px;
+                }
+
+                .o_step_detail_code {
+                    font-size: 0.75rem;
+                    font-family: 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace;
+                    background: var(--ask-bg-primary);
+                    border: 1px solid var(--ask-border);
+                    border-radius: var(--ask-radius-sm);
+                    padding: 10px 12px;
+                    color: var(--ask-text-primary);
+                    margin: 0;
+                    max-height: 200px;
+                    overflow: auto;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    line-height: 1.5;
+                }
+            }
+
+            // Error step styling
+            &.o_step_error {
+                .o_step_header {
+                    background: rgba(239, 68, 68, 0.04);
+                }
+
+                .o_step_tool_name {
+                    color: var(--ask-danger);
+                }
+            }
+        }
+    }
+
+    @keyframes askStepsExpand {
+        from {
+            opacity: 0;
+            max-height: 0;
+        }
+        to {
+            opacity: 1;
+            max-height: 2000px;
+        }
+    }
+
+    @keyframes askStepDetailIn {
+        from {
+            opacity: 0;
+            transform: translateY(-4px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    // =========================================================================
     // SCROLLBAR
     // =========================================================================
     .custom-scrollbar {

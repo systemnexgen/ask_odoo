@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from langchain_postgres.vectorstores import PGVector
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEndpointEmbeddings
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 
 load_dotenv()
 
@@ -20,16 +22,22 @@ class AskOdooModel(models.Model):
         return get_pg_connection_string(self.env)
 
     def _get_llm(self):
-        """Returns the shared ChatGroq LLM client (singleton)."""
+        """Returns the shared LLM client (singleton), using Google Gemini/Gemma."""
         global _llm_instance
         if _llm_instance is None:
-            GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-            # print(f"Groq API Key: {GROQ_API_KEY}")
-            _llm_instance = ChatGroq(
-                # model="llama-3.1-8b-instant",
-                model="openai/gpt-oss-120b",
-                # model = "llama-3.3-70b-versatile",
-                groq_api_key=GROQ_API_KEY,
+            # Commented out Groq implementation as requested
+            # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+            # _llm_instance = ChatGroq(
+            #     model="openai/gpt-oss-120b",
+            #     groq_api_key=GROQ_API_KEY,
+            #     temperature=0
+            # )
+            
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            _llm_instance = ChatGoogleGenerativeAI(
+                model="gemini-3.1-flash-lite",
+                # model="gemma-4-31b-it",
+                google_api_key=google_api_key,
                 temperature=0
             )
         return _llm_instance

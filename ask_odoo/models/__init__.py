@@ -2,6 +2,7 @@ from . import ask_odoo_model
 from . import chat_history
 from . import knowledge_base
 from . import llm
+from . import mcp_client
 from . import rag_mode
 from . import db_mode
 from . import schema
